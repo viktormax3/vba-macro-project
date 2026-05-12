@@ -31,6 +31,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 "inspect" => Inspect(args[1..]),
                 "apply" => Apply(args[1..]),
                 "validate" => Validate(args[1..]),
+                "dump-records" => DumpRecords(args[1..]),
                 _ => Fail($"Unknown command '{args[0]}'."),
             };
         }
@@ -52,7 +53,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var frmPath = Path.GetFullPath(parsed.Positionals[0]);
         var project = UserFormProject.Load(frmPath);
         var layout = FrxBinary.Read(project.FrxPath).Inspect();
-        var document = new LayoutDocument(project.FormName, Path.GetFileName(project.FrxPath), layout.Controls);
+        var document = new LayoutDocument(project.FormName, Path.GetFileName(project.FrxPath), project.FormProperties, layout.Controls);
         WriteJson(parsed.GetOption("out"), document);
         return 0;
     }
@@ -103,6 +104,20 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         return 0;
     }
 
+    private int DumpRecords(string[] args)
+    {
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
+        var frmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var project = UserFormProject.Load(frmPath);
+        var frx = FrxBinary.Read(project.FrxPath);
+        var around = parsed.GetOption("around");
+        var before = parsed.GetIntOption("before", 4);
+        var after = parsed.GetIntOption("after", 8);
+        var records = frx.DumpRecords(around, before, after);
+        WriteJson(parsed.GetOption("out"), records);
+        return 0;
+    }
+
     private void WriteJson(string? outPath, object value)
     {
         var json = JsonSerializer.Serialize(value, JsonOptions);
@@ -128,6 +143,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit inspect <UserForm.frm> [--out layout.json]");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm>");
         stdout.WriteLine("frxedit validate <UserForm.frm>");
+        stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
     }
 }
 
@@ -176,6 +192,22 @@ internal sealed class CommandLine
 
     public string RequireOption(string name) =>
         GetOption(name) ?? throw new CliException($"Missing required option '--{name}'.");
+
+    public int GetIntOption(string name, int defaultValue)
+    {
+        var value = GetOption(name);
+        if (value is null)
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(value, out var parsed) || parsed < 0)
+        {
+            throw new CliException($"Option '--{name}' must be a non-negative integer.");
+        }
+
+        return parsed;
+    }
 }
 
 internal sealed class UserFormProject
@@ -187,12 +219,16 @@ internal sealed class UserFormProject
     private static readonly Regex FormNameRegex = new(
         "Begin\\s+\\{[^}]+\\}\\s+(?<name>\\w+)",
         RegexOptions.Compiled);
+    private static readonly Regex FormPropertyRegex = new(
+        "^\\s*(?<name>[A-Za-z][A-Za-z0-9_]*)\\s*=\\s*(?<value>.*?)\\s*(?:'.*)?$",
+        RegexOptions.Compiled | RegexOptions.Multiline);
 
     public required string FrmPath { get; init; }
     public required string FrxPath { get; init; }
     public required string FrmText { get; init; }
     public required Encoding Encoding { get; init; }
     public required string FormName { get; init; }
+    public required Dictionary<string, object?> FormProperties { get; init; }
 
     public static UserFormProject Load(string frmPath)
     {
@@ -229,6 +265,7 @@ internal sealed class UserFormProject
             FrmText = text,
             Encoding = encoding,
             FormName = formName,
+            FormProperties = ParseFormProperties(text),
         };
     }
 
@@ -246,10 +283,52 @@ internal sealed class UserFormProject
 
         return Encoding.Default;
     }
+
+    private static Dictionary<string, object?> ParseFormProperties(string frmText)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var endMatch = Regex.Match(frmText, "^End\\s*$", RegexOptions.Multiline);
+        var designText = endMatch.Success ? frmText[..endMatch.Index] : frmText;
+        foreach (Match match in FormPropertyRegex.Matches(designText))
+        {
+            var name = match.Groups["name"].Value;
+            if (name.StartsWith("Attribute", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            properties[name] = ParseFrmValue(match.Groups["value"].Value);
+        }
+
+        return properties;
+    }
+
+    private static object? ParseFrmValue(string value)
+    {
+        value = value.Trim();
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+        {
+            return value[1..^1];
+        }
+
+        if (value.Contains('"', StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        if (decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var decimalValue))
+        {
+            return decimalValue;
+        }
+
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
 }
 
 internal sealed class FrxBinary
 {
+    private const double FrxUnitsPerPoint = 35.25;
+    private const int RecordBlockGapThreshold = 512;
     private static readonly byte[] OleSignature = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
     private static readonly Regex ControlNameRegex = new(
         "(CommandButton|TextBox|CheckBox|Frame|Label|ComboBox|SpinButton|OptionButton|Image)\\d+|CustButton\\d+",
@@ -303,7 +382,7 @@ internal sealed class FrxBinary
             AddControlMatch(match, requireKnownType: false);
         }
 
-        return new LayoutInspection(controls.Values.OrderBy(c => c.NameOffset).ToList());
+        return new LayoutInspection(AnnotateRecordOrder(controls.Values.OrderBy(c => c.NameOffset).ToList()));
 
         void AddControlMatch(Match match, bool requireKnownType)
         {
@@ -339,11 +418,18 @@ internal sealed class FrxBinary
             controls[name] = new ControlInfo(
                 name,
                 type,
-                null,
                 placement?.Left,
                 placement?.Top,
-                placement?.Width,
-                placement?.Height,
+                placement?.RawWidth,
+                placement?.RawHeight,
+                ToPoints(placement?.Left),
+                ToPoints(placement?.Top),
+                null,
+                null,
+                ReadKnownProperties(type, nameOffset),
+                null,
+                null,
+                null,
                 null,
                 nameOffset,
                 placement?.LeftOffset,
@@ -351,6 +437,78 @@ internal sealed class FrxBinary
                 placement?.WidthOffset,
                 placement?.HeightOffset);
         }
+    }
+
+    private static IReadOnlyList<ControlInfo> AnnotateRecordOrder(IReadOnlyList<ControlInfo> controls)
+    {
+        var annotated = new List<ControlInfo>(controls.Count);
+        var block = 0;
+        ControlInfo? previous = null;
+
+        for (var index = 0; index < controls.Count; index++)
+        {
+            var control = controls[index];
+            int? delta = previous is null ? null : control.NameOffset - previous.NameOffset;
+            if (delta is > RecordBlockGapThreshold)
+            {
+                block++;
+            }
+
+            annotated.Add(control with
+            {
+                RecordIndex = index,
+                RecordDelta = delta,
+                RecordBlock = block,
+            });
+
+            previous = control;
+        }
+
+        return annotated;
+    }
+
+    public IReadOnlyList<RecordDump> DumpRecords(string? around, int before, int after)
+    {
+        var controls = Inspect().Controls.ToList();
+        var start = 0;
+        var end = controls.Count - 1;
+
+        if (!string.IsNullOrWhiteSpace(around))
+        {
+            var index = controls.FindIndex(c => c.Name.Equals(around, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+            {
+                throw new CliException($"Control '{around}' was not found.");
+            }
+
+            start = Math.Max(0, index - before);
+            end = Math.Min(controls.Count - 1, index + after);
+        }
+
+        var result = new List<RecordDump>();
+        for (var i = start; i <= end; i++)
+        {
+            var control = controls[i];
+            var previous = i > 0 ? controls[i - 1] : null;
+            result.Add(new RecordDump(
+                i,
+                control.Name,
+                control.Type,
+                control.RecordBlock,
+                control.NameOffset,
+                control.RecordDelta,
+                control.Left,
+                control.Top,
+                control.LeftPt,
+                control.TopPt,
+                control.RawWidth,
+                control.RawHeight,
+                control.Properties,
+                ReadHex(Math.Max(0, control.NameOffset - 24), 24),
+                ReadHex(control.NameOffset, Math.Min(control.Name.Length + 16, Bytes.Length - control.NameOffset))));
+        }
+
+        return result;
     }
 
     public void Apply(PatchDocument patch)
@@ -400,10 +558,15 @@ internal sealed class FrxBinary
 
     private void WriteLayout(ControlInfo control, LayoutPatch patch)
     {
+        if (patch.Width is not null || patch.Height is not null)
+        {
+            throw new CliException("Patch fields 'width' and 'height' are not writable yet because FRX size encoding is not fully mapped. Use 'rawWidth'/'rawHeight' only for low-level experiments.");
+        }
+
         WriteOptionalInt(control.LeftOffset, patch.Left, control.Name, "left");
         WriteOptionalInt(control.TopOffset, patch.Top, control.Name, "top");
-        WriteOptionalInt(control.WidthOffset, patch.Width, control.Name, "width");
-        WriteOptionalInt(control.HeightOffset, patch.Height, control.Name, "height");
+        WriteOptionalInt(control.WidthOffset, patch.RawWidth, control.Name, "rawWidth");
+        WriteOptionalInt(control.HeightOffset, patch.RawHeight, control.Name, "rawHeight");
     }
 
     private void WriteOptionalInt(int? offset, int? value, string name, string property)
@@ -449,8 +612,8 @@ internal sealed class FrxBinary
             return null;
         }
 
-        int? widthOffset = null;
-        int? heightOffset = null;
+        int? rawWidthOffset = null;
+        int? rawHeightOffset = null;
         for (var back = 8; back <= 28; back += 4)
         {
             var candidateWidthOffset = nameOffset - back;
@@ -464,8 +627,8 @@ internal sealed class FrxBinary
             var height = ReadInt32(candidateHeightOffset);
             if (width is > 0 and <= 20_000 && height is > 0 and <= 20_000)
             {
-                widthOffset = candidateWidthOffset;
-                heightOffset = candidateHeightOffset;
+                rawWidthOffset = candidateWidthOffset;
+                rawHeightOffset = candidateHeightOffset;
                 break;
             }
         }
@@ -473,17 +636,65 @@ internal sealed class FrxBinary
         return new Placement(
             ReadInt32(leftOffset.Value),
             ReadInt32(topOffset.Value),
-            widthOffset is null ? null : ReadInt32(widthOffset.Value),
-            heightOffset is null ? null : ReadInt32(heightOffset.Value),
+            rawWidthOffset is null ? null : ReadInt32(rawWidthOffset.Value),
+            rawHeightOffset is null ? null : ReadInt32(rawHeightOffset.Value),
             leftOffset.Value,
             topOffset.Value,
-            widthOffset,
-            heightOffset);
+            rawWidthOffset,
+            rawHeightOffset);
     }
+
+    private Dictionary<string, object?>? ReadKnownProperties(string type, int nameOffset)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        var markerOffset = nameOffset - 4;
+        if (markerOffset >= 0)
+        {
+            properties["recordMarkerHex"] = Convert.ToHexString(Bytes.AsSpan(markerOffset, Math.Min(4, Bytes.Length - markerOffset)));
+        }
+
+        var backColor = FindColorNear(nameOffset, searchBefore: 160, searchAfter: 24, likelyBgr: [0x23, 0x23, 0x23]);
+        if (backColor is not null)
+        {
+            properties["backColor"] = backColor;
+        }
+
+        var foreColor = FindColorNear(nameOffset, searchBefore: 160, searchAfter: 24, likelyBgr: [0xCC, 0xCC, 0xCC]);
+        if (foreColor is not null)
+        {
+            properties["foreColor"] = foreColor;
+        }
+
+        return properties.Count == 0 ? null : properties;
+    }
+
+    private string? FindColorNear(int nameOffset, int searchBefore, int searchAfter, byte[] likelyBgr)
+    {
+        var start = Math.Max(0, nameOffset - searchBefore);
+        var end = Math.Min(Bytes.Length - likelyBgr.Length, nameOffset + searchAfter);
+        for (var i = start; i <= end; i++)
+        {
+            if (!Bytes.AsSpan(i, likelyBgr.Length).SequenceEqual(likelyBgr))
+            {
+                continue;
+            }
+
+            return $"&H80{likelyBgr[2]:X2}{likelyBgr[1]:X2}{likelyBgr[0]:X2}&";
+        }
+
+        return null;
+    }
+
+    private static double? ToPoints(int? value) =>
+        value is null ? null : Math.Round(value.Value / FrxUnitsPerPoint, 2);
 
     private static bool IsPlausiblePosition(int value) => value is >= 0 and <= 40_000;
 
     private int ReadInt32(int offset) => BinaryPrimitives.ReadInt32LittleEndian(Bytes.AsSpan(offset, 4));
+
+    private string ReadHex(int offset, int count) =>
+        Convert.ToHexString(Bytes.AsSpan(offset, count));
 
     private static string InferType(string name)
     {
@@ -587,19 +798,47 @@ internal static class VbaRenamer
     }
 }
 
-internal sealed record LayoutDocument(string FormName, string FrxFile, IReadOnlyList<ControlInfo> Controls);
+internal sealed record LayoutDocument(
+    string FormName,
+    string FrxFile,
+    Dictionary<string, object?> FormProperties,
+    IReadOnlyList<ControlInfo> Controls);
 
 internal sealed record LayoutInspection(IReadOnlyList<ControlInfo> Controls);
+
+internal sealed record RecordDump(
+    int Index,
+    string Name,
+    string Type,
+    int? RecordBlock,
+    int NameOffset,
+    int? DeltaFromPrevious,
+    int? Left,
+    int? Top,
+    double? LeftPt,
+    double? TopPt,
+    int? RawWidth,
+    int? RawHeight,
+    Dictionary<string, object?>? Properties,
+    string HeaderHex,
+    string NameAndPositionHex);
 
 internal sealed record ControlInfo(
     string Name,
     string Type,
-    string? Caption,
     int? Left,
     int? Top,
-    int? Width,
-    int? Height,
+    int? RawWidth,
+    int? RawHeight,
+    double? LeftPt,
+    double? TopPt,
+    double? WidthPt,
+    double? HeightPt,
+    Dictionary<string, object?>? Properties,
     string? Parent,
+    int? RecordIndex,
+    int? RecordDelta,
+    int? RecordBlock,
     int NameOffset,
     int? LeftOffset,
     int? TopOffset,
@@ -609,8 +848,8 @@ internal sealed record ControlInfo(
 internal sealed record Placement(
     int Left,
     int Top,
-    int? Width,
-    int? Height,
+    int? RawWidth,
+    int? RawHeight,
     int LeftOffset,
     int TopOffset,
     int? WidthOffset,
@@ -629,6 +868,8 @@ internal sealed class LayoutPatch
     public int? Top { get; set; }
     public int? Width { get; set; }
     public int? Height { get; set; }
+    public int? RawWidth { get; set; }
+    public int? RawHeight { get; set; }
 }
 
 internal sealed class AddControlPatch
