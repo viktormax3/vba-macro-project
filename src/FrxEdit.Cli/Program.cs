@@ -55,8 +55,15 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var frmPath = Path.GetFullPath(parsed.Positionals[0]);
         var project = UserFormProject.Load(frmPath);
         var layout = FrxBinary.Read(project.FrxPath).Inspect(project.KnownControlNames, project.ControlScopes);
-        var document = new LayoutDocument(project.FormName, Path.GetFileName(project.FrxPath), project.FormProperties, layout.Controls);
-        WriteJson(parsed.GetOption("out"), document);
+        var rawDocument = new LayoutDocument(project.FormName, Path.GetFileName(project.FrxPath), project.FormProperties, layout.Controls);
+        var humanDocument = HumanLayoutDocument.FromRaw(rawDocument);
+        WriteJson(parsed.GetOption("out"), humanDocument);
+
+        if (parsed.GetOption("raw-out") is { } rawOut)
+        {
+            WriteJson(rawOut, rawDocument);
+        }
+
         return 0;
     }
 
@@ -165,6 +172,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
     private void PrintHelp()
     {
         stdout.WriteLine("frxedit inspect <UserForm.frm> [--out layout.json]");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm>");
         stdout.WriteLine("frxedit validate <UserForm.frm>");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
@@ -609,7 +617,10 @@ internal sealed class FrxBinary
                 continue;
             }
 
-            var streamControls = ReadStructuredControlsFromFStream(stream, knownControlNames, controlScopes);
+            var streamRecords = ReadStructuredControlRecordsFromFStream(stream, knownControlNames);
+            var streamControls = streamRecords
+                .Select(record => BuildControlInfo(record, controlScopes))
+                .ToList();
             var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
             if (streamControls.Count == 1 && pairedOStream is not null)
             {
@@ -632,13 +643,12 @@ internal sealed class FrxBinary
         return controls.Values.ToList();
     }
 
-    private IReadOnlyList<ControlInfo> ReadStructuredControlsFromFStream(
+    private IReadOnlyList<StructuredControlRecord> ReadStructuredControlRecordsFromFStream(
         StorageEntryDump stream,
-        IReadOnlySet<string>? knownControlNames,
-        IReadOnlyDictionary<string, string>? controlScopes)
+        IReadOnlySet<string>? knownControlNames)
     {
-        var controls = new List<ControlInfo>();
         var data = stream.Data;
+        var candidates = new List<StructuredControlCandidate>();
         for (var textOffset = 4; textOffset < data.Length; textOffset++)
         {
             if (!IsPrintableAscii(data[textOffset]))
@@ -670,48 +680,80 @@ internal sealed class FrxBinary
                 continue;
             }
 
-            var nameOffset = stream.FileOffsets[textOffset];
-            var markerOffset = stream.FileOffsets[marker.Offset];
-            var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["streamName"] = stream.Name,
-                ["streamIndex"] = stream.Index,
-                ["streamLocalNameOffset"] = textOffset,
-                ["recordMarkerHex"] = ReadHex(markerOffset, 4),
-                ["recordMarkerOffset"] = markerOffset,
-                ["streamLocalRecordMarkerOffset"] = marker.Offset,
-                ["tabIndex"] = marker.TabIndex,
-                ["recordTypeCode"] = $"0x{marker.TypeCode:X2}",
-                ["parser"] = "structuredStorageFStream"
-            };
-            var recordEndOffset = FindNextStructuredRecordOffset(data, marker.Offset + 4) ?? data.Length;
-            AddFStreamTextProperties(properties, data, stream.FileOffsets, textOffset, rawName.Length, placement, recordEndOffset);
-
-            controls.Add(new ControlInfo(
-                name,
-                type,
-                placement.Left,
-                placement.Top,
-                placement.RawWidth,
-                placement.RawHeight,
-                ToPoints(placement.Left),
-                ToPoints(placement.Top),
-                null,
-                null,
-                properties,
-                controlScopes?.TryGetValue(name, out var scope) == true ? scope : null,
-                rawName.Equals(name, StringComparison.OrdinalIgnoreCase) ? null : rawName,
-                null,
-                null,
-                null,
-                nameOffset,
-                placement.LeftOffset,
-                placement.TopOffset,
-                placement.WidthOffset,
-                placement.HeightOffset));
+            candidates.Add(new StructuredControlCandidate(marker, textOffset, rawName, name, type, placement));
         }
 
-        return controls;
+        candidates = candidates
+            .OrderBy(candidate => candidate.NameOffset)
+            .ToList();
+
+        var records = new List<StructuredControlRecord>();
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            var endOffset = i + 1 < candidates.Count ? candidates[i + 1].Marker.Offset : data.Length;
+            records.Add(new StructuredControlRecord(
+                stream,
+                candidate.Marker,
+                candidate.Marker.Offset,
+                endOffset,
+                candidate.NameOffset,
+                candidate.RawName.Length,
+                candidate.RawName,
+                candidate.Name,
+                candidate.Type,
+                candidate.Placement,
+                ObjectStream: null));
+        }
+
+        return records;
+    }
+
+    private ControlInfo BuildControlInfo(
+        StructuredControlRecord record,
+        IReadOnlyDictionary<string, string>? controlScopes)
+    {
+        var markerOffset = record.Stream.FileOffsets[record.RecordStartOffset];
+        var nameOffset = record.Stream.FileOffsets[record.NameOffset];
+        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["streamName"] = record.Stream.Name,
+            ["streamIndex"] = record.Stream.Index,
+            ["streamLocalRecordStartOffset"] = record.RecordStartOffset,
+            ["streamLocalRecordEndOffset"] = record.RecordEndOffset,
+            ["streamLocalNameOffset"] = record.NameOffset,
+            ["nameLength"] = record.NameLength,
+            ["recordMarkerHex"] = ReadHex(markerOffset, 4),
+            ["recordMarkerOffset"] = markerOffset,
+            ["streamLocalRecordMarkerOffset"] = record.Marker.Offset,
+            ["tabIndex"] = record.Marker.TabIndex,
+            ["recordTypeCode"] = $"0x{record.Marker.TypeCode:X2}",
+            ["parser"] = "structuredStorageFStream"
+        };
+        AddFStreamTextProperties(properties, record);
+
+        return new ControlInfo(
+            record.Name,
+            record.Type,
+            record.Placement.Left,
+            record.Placement.Top,
+            record.Placement.RawWidth,
+            record.Placement.RawHeight,
+            ToPoints(record.Placement.Left),
+            ToPoints(record.Placement.Top),
+            null,
+            null,
+            properties,
+            controlScopes?.TryGetValue(record.Name, out var scope) == true ? scope : null,
+            record.RawName.Equals(record.Name, StringComparison.OrdinalIgnoreCase) ? null : record.RawName,
+            null,
+            null,
+            null,
+            nameOffset,
+            record.Placement.LeftOffset,
+            record.Placement.TopOffset,
+            record.Placement.WidthOffset,
+            record.Placement.HeightOffset);
     }
 
     private static StorageEntryDump? FindPairedObjectStream(
@@ -766,13 +808,14 @@ internal sealed class FrxBinary
 
     private static void AddFStreamTextProperties(
         Dictionary<string, object?> properties,
-        byte[] data,
-        int[] fileOffsets,
-        int nameOffset,
-        int rawNameLength,
-        Placement placement,
-        int recordEndOffset)
+        StructuredControlRecord record)
     {
+        var data = record.Stream.Data;
+        var fileOffsets = record.Stream.FileOffsets;
+        var nameOffset = record.NameOffset;
+        var rawNameLength = record.NameLength;
+        var placement = record.Placement;
+        var recordEndOffset = record.RecordEndOffset;
         var leftLocalOffset = FindLocalOffset(fileOffsets, placement.LeftOffset);
         if (leftLocalOffset is null)
         {
@@ -795,36 +838,12 @@ internal sealed class FrxBinary
         var controlTip = afterTop < controlTipEnd
             ? FindNextIdentifierLikeText(data, afterTop, controlTipEnd)
             : null;
-        if (controlTip is not null && !LooksLikeControlNameText(controlTip.Value.Text))
+        if (controlTip is not null)
         {
             properties["controlTipTextRaw"] = controlTip.Value.Text;
             properties["controlTipText"] = TrimLikelyPropertySuffix(controlTip.Value.Text);
             properties["controlTipTextOffset"] = fileOffsets[controlTip.Value.Offset];
         }
-    }
-
-    private static int? FindNextStructuredRecordOffset(byte[] data, int startOffset)
-    {
-        for (var offset = Math.Max(0, startOffset); offset + 4 < data.Length; offset++)
-        {
-            var tabIndex = data[offset];
-            var typeCode = data[offset + 2];
-            if (data[offset + 1] != 0 ||
-                data[offset + 3] != 0 ||
-                tabIndex > 0x7F ||
-                !TryGetMsFormsType(typeCode, out _))
-            {
-                continue;
-            }
-
-            var text = FindFirstIdentifierLikeTextOffset(data, offset + 4, Math.Min(data.Length, offset + 32));
-            if (text is not null)
-            {
-                return offset;
-            }
-        }
-
-        return null;
     }
 
     private static ControlTypeMarker? FindStructuredMarkerBefore(byte[] data, int textOffset)
@@ -1522,26 +1541,6 @@ internal sealed class FrxBinary
         return null;
     }
 
-    private static int? FindFirstIdentifierLikeTextOffset(byte[] data, int start, int end)
-    {
-        var limit = Math.Min(data.Length, end);
-        for (var offset = start; offset < limit; offset++)
-        {
-            if (!IsIdentifierStart(data[offset]))
-            {
-                continue;
-            }
-
-            var text = ReadIdentifierLikeText(data, offset, limit - offset);
-            if (text is not null)
-            {
-                return offset;
-            }
-        }
-
-        return null;
-    }
-
     private static IReadOnlyList<TextRun> FindTextRuns(byte[] data, int minLength)
     {
         var runs = new List<TextRun>();
@@ -1581,32 +1580,6 @@ internal sealed class FrxBinary
         }
 
         return value;
-    }
-
-    private static bool LooksLikeControlNameText(string value)
-    {
-        foreach (var prefix in StandardNamePrefixes)
-        {
-            if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var offset = prefix.Length;
-            var digitCount = 0;
-            while (offset < value.Length && char.IsDigit(value[offset]))
-            {
-                offset++;
-                digitCount++;
-            }
-
-            if (digitCount > 0)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static PairCandidate? FindPlausiblePair(byte[] data, int start, int maxDistance)
@@ -1790,6 +1763,133 @@ internal sealed record LayoutDocument(
     Dictionary<string, object?> FormProperties,
     IReadOnlyList<ControlInfo> Controls);
 
+internal sealed record HumanLayoutDocument(
+    string FormName,
+    string FrxFile,
+    Dictionary<string, object?> FormProperties,
+    IReadOnlyList<HumanControlInfo> Controls)
+{
+    private static readonly string[] HumanPropertyOrder =
+    [
+        "caption",
+        "text",
+        "value",
+        "tag",
+        "controlTipText",
+        "accelerator",
+        "backColor",
+        "foreColor",
+        "fontName",
+        "fontSize",
+        "default",
+        "cancel",
+        "enabled",
+        "visible",
+        "locked",
+        "tabIndex",
+        "tabStop",
+        "wordWrap",
+        "autoSize",
+        "specialEffect",
+        "picturePosition",
+        "sizeSource"
+    ];
+
+    public static HumanLayoutDocument FromRaw(LayoutDocument raw)
+    {
+        return new HumanLayoutDocument(
+            raw.FormName,
+            raw.FrxFile,
+            raw.FormProperties,
+            raw.Controls.Select(ToHumanControl).ToList());
+    }
+
+    private static HumanControlInfo ToHumanControl(ControlInfo control)
+    {
+        var bounds = new HumanBounds(
+            control.LeftPt,
+            control.TopPt,
+            control.WidthPt,
+            control.HeightPt,
+            control.Left,
+            control.Top,
+            control.RawWidth,
+            control.RawHeight,
+            LeftEditable: control.LeftOffset is not null,
+            TopEditable: control.TopOffset is not null,
+            RawWidthEditable: control.WidthOffset is not null,
+            RawHeightEditable: control.HeightOffset is not null);
+
+        return new HumanControlInfo(
+            control.Name,
+            control.Type,
+            control.Parent,
+            control.BinaryName,
+            bounds,
+            BuildHumanProperties(control));
+    }
+
+    private static IReadOnlyList<HumanProperty> BuildHumanProperties(ControlInfo control)
+    {
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        if (control.Properties is not null)
+        {
+            foreach (var name in HumanPropertyOrder)
+            {
+                if (control.Properties.TryGetValue(name, out var value))
+                {
+                    values[name] = value;
+                }
+            }
+        }
+
+        if (control.Properties?.TryGetValue("caption", out var caption) == true)
+        {
+            values["caption"] = caption;
+        }
+
+        return values
+            .Select(pair => new HumanProperty(pair.Key, pair.Value, IsCurrentlyEditable(pair.Key, control.Properties)))
+            .ToList();
+    }
+
+    private static bool IsCurrentlyEditable(string name, Dictionary<string, object?>? properties)
+    {
+        if (properties is null)
+        {
+            return false;
+        }
+
+        return name.Equals("tabIndex", StringComparison.OrdinalIgnoreCase)
+            ? properties.ContainsKey("recordMarkerOffset")
+            : properties.ContainsKey($"{name}Offset");
+    }
+}
+
+internal sealed record HumanControlInfo(
+    string Name,
+    string Type,
+    string? Parent,
+    string? BinaryName,
+    HumanBounds Bounds,
+    IReadOnlyList<HumanProperty> Properties);
+
+internal sealed record HumanBounds(
+    double? LeftPt,
+    double? TopPt,
+    double? WidthPt,
+    double? HeightPt,
+    int? LeftRaw,
+    int? TopRaw,
+    int? WidthRaw,
+    int? HeightRaw,
+    bool LeftEditable,
+    bool TopEditable,
+    bool RawWidthEditable,
+    bool RawHeightEditable);
+
+internal sealed record HumanProperty(string Name, object? Value, bool Editable);
+
 internal sealed record LayoutInspection(IReadOnlyList<ControlInfo> Controls);
 
 internal sealed record RecordDump(
@@ -1845,6 +1945,27 @@ internal sealed record Placement(
 internal sealed record ContainerDimensions(int Width, int Height, int WidthOffset, int HeightOffset);
 
 internal sealed record ControlTypeMarker(int Offset, byte TabIndex, byte TypeCode);
+
+internal sealed record StructuredControlCandidate(
+    ControlTypeMarker Marker,
+    int NameOffset,
+    string RawName,
+    string Name,
+    string Type,
+    Placement Placement);
+
+internal sealed record StructuredControlRecord(
+    StorageEntryDump Stream,
+    ControlTypeMarker Marker,
+    int RecordStartOffset,
+    int RecordEndOffset,
+    int NameOffset,
+    int NameLength,
+    string RawName,
+    string Name,
+    string Type,
+    Placement Placement,
+    StorageEntryDump? ObjectStream);
 
 internal sealed record ObjectStreamProperties(
     Dictionary<string, object?> Properties,

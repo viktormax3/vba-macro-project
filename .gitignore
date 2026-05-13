@@ -4,6 +4,8 @@
 # FRX parser diagnostics and generated experiment outputs.
 all_controls_layout_*.json
 inspect_*.json
+*.inspect.json
+*.raw.json
 label_records.json
 layout_v*.json
 storage_all*.json
