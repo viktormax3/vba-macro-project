@@ -33,6 +33,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 "validate" => Validate(args[1..]),
                 "dump-records" => DumpRecords(args[1..]),
                 "dump-storage" => DumpStorage(args[1..]),
+                "dump-stream-records" => DumpStreamRecords(args[1..]),
                 _ => Fail($"Unknown command '{args[0]}'."),
             };
         }
@@ -130,6 +131,17 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         return 0;
     }
 
+    private int DumpStreamRecords(string[] args)
+    {
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
+        var frmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var project = UserFormProject.Load(frmPath);
+        var frx = FrxBinary.Read(project.FrxPath);
+        var storage = CompoundStorageInspector.Inspect(frx.Bytes, frx.OleOffset);
+        WriteJson(parsed.GetOption("out"), StreamRecordInspector.Inspect(storage.Streams));
+        return 0;
+    }
+
     private void WriteJson(string? outPath, object value)
     {
         var json = JsonSerializer.Serialize(value, JsonOptions);
@@ -157,6 +169,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit validate <UserForm.frm>");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");
+        stdout.WriteLine("frxedit dump-stream-records <UserForm.frm> [--out stream-records.json]");
     }
 }
 
@@ -472,6 +485,21 @@ internal sealed class FrxBinary
         IReadOnlySet<string>? knownControlNames = null,
         IReadOnlyDictionary<string, string>? controlScopes = null)
     {
+        var structured = InspectStructuredStorage(knownControlNames, controlScopes);
+        if (structured.Count > 0)
+        {
+            var orderedStructured = structured.OrderBy(c => c.NameOffset).ToList();
+            var annotatedStructured = AnnotateRecordOrder(orderedStructured);
+            return new LayoutInspection(AddContainerDimensions(annotatedStructured));
+        }
+
+        return InspectByNameScan(knownControlNames, controlScopes);
+    }
+
+    private LayoutInspection InspectByNameScan(
+        IReadOnlySet<string>? knownControlNames = null,
+        IReadOnlyDictionary<string, string>? controlScopes = null)
+    {
         var ascii = Encoding.Latin1.GetString(Bytes);
         var controls = new Dictionary<string, ControlInfo>(StringComparer.OrdinalIgnoreCase);
 
@@ -539,6 +567,174 @@ internal sealed class FrxBinary
                 placement?.WidthOffset,
                 placement?.HeightOffset);
         }
+    }
+
+    private IReadOnlyList<ControlInfo> InspectStructuredStorage(
+        IReadOnlySet<string>? knownControlNames,
+        IReadOnlyDictionary<string, string>? controlScopes)
+    {
+        CompoundStorageDump storage;
+        try
+        {
+            storage = CompoundStorageInspector.Inspect(Bytes, OleOffset);
+        }
+        catch (CliException)
+        {
+            return [];
+        }
+
+        var controls = new Dictionary<int, ControlInfo>();
+        foreach (var stream in storage.Streams.Where(s => s.Kind == "Stream" && s.Name == "f"))
+        {
+            if (stream.FileOffsets.Length != stream.Data.Length)
+            {
+                continue;
+            }
+
+            foreach (var control in ReadStructuredControlsFromFStream(stream, knownControlNames, controlScopes))
+            {
+                controls.TryAdd(control.NameOffset, control);
+            }
+        }
+
+        return controls.Values.ToList();
+    }
+
+    private IReadOnlyList<ControlInfo> ReadStructuredControlsFromFStream(
+        StorageEntryDump stream,
+        IReadOnlySet<string>? knownControlNames,
+        IReadOnlyDictionary<string, string>? controlScopes)
+    {
+        var controls = new List<ControlInfo>();
+        var data = stream.Data;
+        for (var textOffset = 4; textOffset < data.Length; textOffset++)
+        {
+            if (!IsPrintableAscii(data[textOffset]))
+            {
+                continue;
+            }
+
+            if (textOffset > 0 && IsIdentifierPart(data[textOffset - 1]))
+            {
+                continue;
+            }
+
+            var marker = FindStructuredMarkerBefore(data, textOffset);
+            if (marker is null || !TryGetMsFormsType(marker.TypeCode, out var type))
+            {
+                continue;
+            }
+
+            var rawName = ReadNullTerminatedAscii(data, textOffset, maxLength: 64);
+            if (rawName is null || IsKnownNonControlIdentifier(rawName))
+            {
+                continue;
+            }
+
+            var name = CanonicalizeName(rawName, knownControlNames);
+            var placement = TryReadStreamPlacement(data, stream.FileOffsets, textOffset + rawName.Length);
+            if (placement is null)
+            {
+                continue;
+            }
+
+            var nameOffset = stream.FileOffsets[textOffset];
+            var markerOffset = stream.FileOffsets[marker.Offset];
+            var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["streamName"] = stream.Name,
+                ["streamIndex"] = stream.Index,
+                ["streamLocalNameOffset"] = textOffset,
+                ["recordMarkerHex"] = ReadHex(markerOffset, 4),
+                ["recordMarkerOffset"] = markerOffset,
+                ["streamLocalRecordMarkerOffset"] = marker.Offset,
+                ["tabIndex"] = marker.TabIndex,
+                ["recordTypeCode"] = $"0x{marker.TypeCode:X2}",
+                ["parser"] = "structuredStorageFStream"
+            };
+
+            controls.Add(new ControlInfo(
+                name,
+                type,
+                placement.Left,
+                placement.Top,
+                placement.RawWidth,
+                placement.RawHeight,
+                ToPoints(placement.Left),
+                ToPoints(placement.Top),
+                null,
+                null,
+                properties,
+                controlScopes?.TryGetValue(name, out var scope) == true ? scope : null,
+                rawName.Equals(name, StringComparison.OrdinalIgnoreCase) ? null : rawName,
+                null,
+                null,
+                null,
+                nameOffset,
+                placement.LeftOffset,
+                placement.TopOffset,
+                placement.WidthOffset,
+                placement.HeightOffset));
+        }
+
+        return controls;
+    }
+
+    private static ControlTypeMarker? FindStructuredMarkerBefore(byte[] data, int textOffset)
+    {
+        var candidates = new List<(ControlTypeMarker Marker, int Gap)>();
+        var start = Math.Max(0, textOffset - 16);
+        for (var offset = textOffset - 4; offset >= start; offset--)
+        {
+            var tabIndex = data[offset];
+            var typeCode = data[offset + 2];
+            if (data[offset + 1] == 0 &&
+                data[offset + 3] == 0 &&
+                tabIndex <= 0x7F &&
+                TryGetMsFormsType(typeCode, out _))
+            {
+                candidates.Add((new ControlTypeMarker(offset, tabIndex, typeCode), textOffset - offset - 4));
+            }
+        }
+
+        return candidates
+            .OrderBy(candidate => candidate.Gap % 4 == 0 ? 0 : 1)
+            .ThenBy(candidate => candidate.Gap)
+            .ThenBy(candidate => candidate.Marker.TabIndex)
+            .Select(candidate => candidate.Marker)
+            .FirstOrDefault();
+    }
+
+    private Placement? TryReadStreamPlacement(byte[] data, int[] fileOffsets, int afterNameOffset)
+    {
+        var searchStart = Math.Min(data.Length, afterNameOffset);
+        while (searchStart < data.Length && data[searchStart] == 0)
+        {
+            searchStart++;
+        }
+
+        var searchEnd = Math.Min(data.Length - 8, searchStart + 56);
+        for (var offset = searchStart; offset <= searchEnd; offset += 2)
+        {
+            var left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4));
+            var top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset + 4, 4));
+            if (!IsPlausiblePosition(left) || !IsPlausiblePosition(top))
+            {
+                continue;
+            }
+
+            return new Placement(
+                left,
+                top,
+                null,
+                null,
+                fileOffsets[offset],
+                fileOffsets[offset + 4],
+                null,
+                null);
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<ControlInfo> AnnotateRecordOrder(IReadOnlyList<ControlInfo> controls)
@@ -917,18 +1113,7 @@ internal sealed class FrxBinary
     private string InferTypeFromRecordMarker(int nameOffset)
     {
         var marker = FindControlTypeMarker(nameOffset);
-        return marker?.TypeCode switch
-        {
-            0x0C => "Image",
-            0x0E => "Frame",
-            0x10 => "SpinButton",
-            0x11 => "CommandButton",
-            0x15 => "Label",
-            0x17 => "TextBox",
-            0x1A => "CheckBox",
-            0x1B => "OptionButton",
-            _ => "Unknown",
-        };
+        return marker is not null && TryGetMsFormsType(marker.TypeCode, out var type) ? type : "Unknown";
     }
 
     private static string CanonicalizeName(string binaryName, IReadOnlySet<string>? knownControlNames)
@@ -957,6 +1142,44 @@ internal sealed class FrxBinary
         name.Equals("Object", StringComparison.OrdinalIgnoreCase) ||
         TypePrefixes.Keys.Any(prefix => name.Equals(prefix, StringComparison.OrdinalIgnoreCase));
 
+    private static string? ReadNullTerminatedAscii(byte[] data, int offset, int maxLength)
+    {
+        if (offset >= data.Length || !IsIdentifierStart(data[offset]))
+        {
+            return null;
+        }
+
+        var end = offset;
+        var limit = Math.Min(data.Length, offset + maxLength);
+        while (end < limit && data[end] != 0)
+        {
+            if (!IsIdentifierPart(data[end]))
+            {
+                return end - offset < 3 ? null : Encoding.Latin1.GetString(data, offset, end - offset);
+            }
+
+            end++;
+        }
+
+        if (end - offset < 3)
+        {
+            return null;
+        }
+
+        return Encoding.Latin1.GetString(data, offset, end - offset);
+    }
+
+    private static bool IsIdentifierStart(byte value) =>
+        value is >= (byte)'A' and <= (byte)'Z' ||
+        value is >= (byte)'a' and <= (byte)'z' ||
+        value == (byte)'_';
+
+    private static bool IsIdentifierPart(byte value) =>
+        IsIdentifierStart(value) ||
+        value is >= (byte)'0' and <= (byte)'9';
+
+    private static bool IsPrintableAscii(byte value) => value is >= 0x20 and <= 0x7E;
+
     private bool HasKnownControlHeader(int nameOffset)
         => FindControlTypeMarker(nameOffset) is not null;
 
@@ -968,7 +1191,7 @@ internal sealed class FrxBinary
             var typeCode = Bytes[offset + 2];
             if (Bytes[offset + 1] == 0x00 &&
                 Bytes[offset + 3] == 0x00 &&
-                typeCode is 0x0C or 0x0E or 0x10 or 0x11 or 0x15 or 0x17 or 0x1A or 0x1B &&
+                TryGetMsFormsType(typeCode, out _) &&
                 tabIndex <= 0x7F)
             {
                 return new ControlTypeMarker(offset, tabIndex, typeCode);
@@ -976,6 +1199,30 @@ internal sealed class FrxBinary
         }
 
         return null;
+    }
+
+    private static bool TryGetMsFormsType(byte typeCode, out string type)
+    {
+        type = typeCode switch
+        {
+            0x0C => "Image",
+            0x0E => "Frame",
+            0x10 => "SpinButton",
+            0x11 => "CommandButton",
+            0x12 => "TabStrip",
+            0x15 => "Label",
+            0x17 => "TextBox",
+            0x18 => "ListBox",
+            0x19 => "ComboBox",
+            0x1A => "CheckBox",
+            0x1B => "OptionButton",
+            0x1C => "ToggleButton",
+            0x2F => "ScrollBar",
+            0x39 => "MultiPage",
+            _ => string.Empty,
+        };
+
+        return type.Length > 0;
     }
 
     private static int FindBytes(byte[] haystack, byte[] needle)
@@ -1138,7 +1385,10 @@ internal static class CompoundStorageInspector
         var directoryBytes = ReadRegularStream(bytes, oleOffset, sectorSize, fat, firstDirectorySector);
         var entries = ReadDirectory(directoryBytes);
         var root = entries.FirstOrDefault(e => e.Type == 5);
-        var rootStream = root is null ? [] : TrimToSize(ReadRegularStream(bytes, oleOffset, sectorSize, fat, root.StartSector), root.Size);
+        var rootRead = root is null
+            ? new StreamRead([], [])
+            : TrimToSize(ReadRegularStreamWithOffsets(bytes, oleOffset, sectorSize, fat, root.StartSector), root.Size);
+        var rootStream = rootRead.Data;
         var miniFat = ReadMiniFat(bytes, oleOffset, sectorSize, fat, firstMiniFatSector, miniFatSectorCount);
 
         var streamIndex = 0;
@@ -1147,9 +1397,10 @@ internal static class CompoundStorageInspector
             .Select(e =>
             {
                 var index = streamIndex++;
-                var data = e.Type == 2
-                    ? ReadStreamData(bytes, oleOffset, sectorSize, miniSectorSize, fat, miniFat, rootStream, e, miniStreamCutoff)
-                    : rootStream;
+                var read = e.Type == 2
+                    ? ReadStreamData(bytes, oleOffset, sectorSize, miniSectorSize, fat, miniFat, rootRead, e, miniStreamCutoff)
+                    : rootRead;
+                var data = read.Data;
                 var sample = Convert.ToHexString(data.AsSpan(0, Math.Min(32, data.Length)));
                 return new StorageEntryDump(
                     index,
@@ -1159,8 +1410,11 @@ internal static class CompoundStorageInspector
                     e.Size,
                     e.Type == 2 && e.Size < (ulong)miniStreamCutoff,
                     sample,
+                    data.Length <= 512 ? Convert.ToHexString(data) : null,
                     DetectResourceKind(sample),
-                    ScanResourceHits(data));
+                    ScanResourceHits(data),
+                    data,
+                    read.FileOffsets);
             })
             .OrderBy(e => e.Index)
             .ToList();
@@ -1231,6 +1485,33 @@ internal static class CompoundStorageInspector
         return output.ToArray();
     }
 
+    private static StreamRead ReadRegularStreamWithOffsets(byte[] bytes, int oleOffset, int sectorSize, int[] fat, int firstSector)
+    {
+        if (firstSector < 0)
+        {
+            return new StreamRead([], []);
+        }
+
+        using var output = new MemoryStream();
+        var offsets = new List<int>();
+        foreach (var sectorId in FollowChain(fat, firstSector))
+        {
+            var sectorOffset = GetSectorOffset(bytes, oleOffset, sectorSize, sectorId);
+            if (sectorOffset < 0)
+            {
+                continue;
+            }
+
+            output.Write(bytes.AsSpan(sectorOffset, sectorSize));
+            for (var i = 0; i < sectorSize; i++)
+            {
+                offsets.Add(sectorOffset + i);
+            }
+        }
+
+        return new StreamRead(output.ToArray(), offsets.ToArray());
+    }
+
     private static byte[] ReadMiniStream(byte[] rootStream, int miniSectorSize, int[] miniFat, int firstMiniSector, ulong size)
     {
         if (firstMiniSector < 0)
@@ -1258,6 +1539,35 @@ internal static class CompoundStorageInspector
         return data.Length > (int)size ? data[..(int)size] : data;
     }
 
+    private static StreamRead ReadMiniStream(StreamRead rootStream, int miniSectorSize, int[] miniFat, int firstMiniSector, ulong size)
+    {
+        if (firstMiniSector < 0)
+        {
+            return new StreamRead([], []);
+        }
+
+        using var output = new MemoryStream();
+        var offsets = new List<int>();
+        foreach (var sectorId in FollowChain(miniFat, firstMiniSector))
+        {
+            var offset = sectorId * miniSectorSize;
+            if (offset < 0 || offset >= rootStream.Data.Length)
+            {
+                break;
+            }
+
+            var count = Math.Min(miniSectorSize, rootStream.Data.Length - offset);
+            output.Write(rootStream.Data.AsSpan(offset, count));
+            offsets.AddRange(rootStream.FileOffsets.Skip(offset).Take(count));
+            if ((ulong)output.Length >= size)
+            {
+                break;
+            }
+        }
+
+        return TrimToSize(new StreamRead(output.ToArray(), offsets.ToArray()), size);
+    }
+
     private static IEnumerable<int> FollowChain(int[] fat, int firstSector)
     {
         var seen = new HashSet<int>();
@@ -1275,13 +1585,19 @@ internal static class CompoundStorageInspector
 
     private static byte[] ReadSector(byte[] bytes, int oleOffset, int sectorSize, int sectorId)
     {
-        var offset = oleOffset + HeaderSize + sectorId * sectorSize;
-        if (sectorId < 0 || offset < 0 || offset + sectorSize > bytes.Length)
+        var offset = GetSectorOffset(bytes, oleOffset, sectorSize, sectorId);
+        if (offset < 0)
         {
             return [];
         }
 
         return bytes.AsSpan(offset, sectorSize).ToArray();
+    }
+
+    private static int GetSectorOffset(byte[] bytes, int oleOffset, int sectorSize, int sectorId)
+    {
+        var offset = oleOffset + HeaderSize + sectorId * sectorSize;
+        return sectorId < 0 || offset < 0 || offset + sectorSize > bytes.Length ? -1 : offset;
     }
 
     private static List<StorageDirectoryEntry> ReadDirectory(byte[] directoryBytes)
@@ -1306,25 +1622,33 @@ internal static class CompoundStorageInspector
         return entries;
     }
 
-    private static byte[] ReadStreamData(
+    private static StreamRead ReadStreamData(
         byte[] bytes,
         int oleOffset,
         int sectorSize,
         int miniSectorSize,
         int[] fat,
         int[] miniFat,
-        byte[] rootStream,
+        StreamRead rootStream,
         StorageDirectoryEntry entry,
         int miniStreamCutoff)
     =>
         entry.Size < (ulong)miniStreamCutoff
             ? ReadMiniStream(rootStream, miniSectorSize, miniFat, entry.StartSector, entry.Size)
-            : TrimToSize(ReadRegularStream(bytes, oleOffset, sectorSize, fat, entry.StartSector), entry.Size);
+            : TrimToSize(ReadRegularStreamWithOffsets(bytes, oleOffset, sectorSize, fat, entry.StartSector), entry.Size);
 
     private static byte[] TrimToSize(byte[] data, ulong size)
     {
         var targetSize = (int)Math.Min((ulong)data.Length, size);
         return data.Length == targetSize ? data : data[..targetSize];
+    }
+
+    private static StreamRead TrimToSize(StreamRead read, ulong size)
+    {
+        var targetSize = (int)Math.Min((ulong)read.Data.Length, size);
+        return read.Data.Length == targetSize
+            ? read
+            : new StreamRead(read.Data[..targetSize], read.FileOffsets[..targetSize]);
     }
 
     private static string? DetectResourceKind(string sampleHex)
@@ -1541,8 +1865,215 @@ internal sealed record StorageEntryDump(
     ulong Size,
     bool IsMiniStream,
     string SampleHex,
+    string? DataHex,
     string? ResourceKind,
-    IReadOnlyList<ResourceHit> ResourceHits);
+    IReadOnlyList<ResourceHit> ResourceHits,
+    [property: JsonIgnore] byte[] Data,
+    [property: JsonIgnore] int[] FileOffsets);
+
+internal sealed record StreamRead(byte[] Data, int[] FileOffsets);
+
+internal static class StreamRecordInspector
+{
+    private static readonly HashSet<byte> KnownTypeCodes = new([0x0C, 0x0E, 0x10, 0x11, 0x12, 0x15, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x2F, 0x39]);
+
+    public static IReadOnlyList<StreamRecordDump> Inspect(IReadOnlyList<StorageEntryDump> streams)
+    {
+        return streams
+            .Where(s => s.Kind == "Stream" && s.Name is "f" or "o")
+            .Select(s => new StreamRecordDump(
+                s.Index,
+                s.Name,
+                s.Size,
+                s.Name == "f" ? ScanStructuralRecords(s.Data) : [],
+                ScanAsciiRuns(s.Data)))
+            .ToList();
+    }
+
+    private static IReadOnlyList<StructuralRecordCandidate> ScanStructuralRecords(byte[] data)
+    {
+        var records = new List<StructuralRecordCandidate>();
+
+        for (var offset = 0; offset <= data.Length - 4; offset++)
+        {
+            var tabIndex = data[offset];
+            var typeCode = data[offset + 2];
+            if (data[offset + 1] != 0 || data[offset + 3] != 0 || tabIndex > 127 || !KnownTypeCodes.Contains(typeCode))
+            {
+                continue;
+            }
+
+            var name = FindFirstAsciiRun(data, offset + 4, 80);
+            var intsAfterName = name is null
+                ? []
+                : ReadFollowingInt32Values(data, name.Offset + name.Length, 4);
+
+            records.Add(new StructuralRecordCandidate(
+                offset,
+                tabIndex,
+                typeCode,
+                GuessTypeName(typeCode),
+                name?.Offset,
+                name?.Text,
+                intsAfterName,
+                Convert.ToHexString(data.AsSpan(Math.Max(0, offset - 8), Math.Min(48, data.Length - Math.Max(0, offset - 8))))));
+        }
+
+        return records;
+    }
+
+    private static IReadOnlyList<AsciiRunCandidate> ScanAsciiRuns(byte[] data)
+    {
+        var runs = new List<AsciiRunCandidate>();
+        var offset = 0;
+        while (offset < data.Length)
+        {
+            if (!IsPrintableAscii(data[offset]))
+            {
+                offset++;
+                continue;
+            }
+
+            var start = offset;
+            while (offset < data.Length && IsPrintableAscii(data[offset]))
+            {
+                offset++;
+            }
+
+            var length = offset - start;
+            if (length >= 3)
+            {
+                runs.Add(new AsciiRunCandidate(
+                    start,
+                    Encoding.Latin1.GetString(data, start, length),
+                    length,
+                    ReadFollowingInt32Values(data, offset, 4),
+                    FindPlausibleInt32Pairs(data, offset, 48),
+                    Convert.ToHexString(data.AsSpan(Math.Max(0, start - 8), Math.Min(48, data.Length - Math.Max(0, start - 8))))));
+            }
+        }
+
+        return runs;
+    }
+
+    private static AsciiRunCandidate? FindFirstAsciiRun(byte[] data, int start, int maxDistance)
+    {
+        var limit = Math.Min(data.Length, start + maxDistance);
+        for (var offset = start; offset < limit; offset++)
+        {
+            if (!IsPrintableAscii(data[offset]))
+            {
+                continue;
+            }
+
+            var runStart = offset;
+            while (offset < limit && IsPrintableAscii(data[offset]))
+            {
+                offset++;
+            }
+
+            var length = offset - runStart;
+            if (length >= 3)
+            {
+                return new AsciiRunCandidate(
+                    runStart,
+                    Encoding.Latin1.GetString(data, runStart, length),
+                    length,
+                    ReadFollowingInt32Values(data, offset, 4),
+                    FindPlausibleInt32Pairs(data, offset, 48),
+                    Convert.ToHexString(data.AsSpan(Math.Max(0, runStart - 8), Math.Min(48, data.Length - Math.Max(0, runStart - 8)))));
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<int> ReadFollowingInt32Values(byte[] data, int offset, int count)
+    {
+        var values = new List<int>();
+        while (offset < data.Length && data[offset] == 0)
+        {
+            offset++;
+        }
+
+        for (var i = 0; i < count && offset + 4 <= data.Length; i++, offset += 4)
+        {
+            values.Add(BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4)));
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyList<Int32PairCandidate> FindPlausibleInt32Pairs(byte[] data, int offset, int maxDistance)
+    {
+        var pairs = new List<Int32PairCandidate>();
+        var limit = Math.Min(data.Length - 8, offset + maxDistance);
+        for (var cursor = offset; cursor <= limit; cursor += 2)
+        {
+            var first = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+            var second = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor + 4, 4));
+            if (IsPlausibleTwipValue(first) && IsPlausibleTwipValue(second))
+            {
+                pairs.Add(new Int32PairCandidate(cursor, first, second));
+            }
+        }
+
+        return pairs;
+    }
+
+    private static bool IsPlausibleTwipValue(int value) => value is >= 0 and <= 100000;
+
+    private static bool IsPrintableAscii(byte value) => value is >= 0x20 and <= 0x7E;
+
+    private static string GuessTypeName(byte typeCode) => typeCode switch
+    {
+        0x0C => "Image",
+        0x0E => "Frame",
+        0x10 => "SpinButton",
+        0x11 => "CommandButton",
+        0x12 => "TabStrip",
+        0x15 => "Label",
+        0x17 => "TextBox",
+        0x18 => "ListBox",
+        0x19 => "ComboBox",
+        0x1A => "CheckBox",
+        0x1B => "OptionButton",
+        0x1C => "ToggleButton",
+        0x2F => "ScrollBar",
+        0x39 => "MultiPage",
+        _ => $"0x{typeCode:X2}",
+    };
+}
+
+internal sealed record StreamRecordDump(
+    int StreamIndex,
+    string StreamName,
+    ulong Size,
+    IReadOnlyList<StructuralRecordCandidate> StructuralRecords,
+    IReadOnlyList<AsciiRunCandidate> TextRuns);
+
+internal sealed record StructuralRecordCandidate(
+    int MarkerOffset,
+    byte TabIndex,
+    byte TypeCode,
+    string TypeGuess,
+    int? FirstTextOffset,
+    string? FirstText,
+    IReadOnlyList<int> Int32AfterFirstText,
+    string ContextHex);
+
+internal sealed record AsciiRunCandidate(
+    int Offset,
+    string Text,
+    int Length,
+    IReadOnlyList<int> FollowingInt32,
+    IReadOnlyList<Int32PairCandidate> PlausibleInt32Pairs,
+    string ContextHex);
+
+internal sealed record Int32PairCandidate(
+    int Offset,
+    int First,
+    int Second);
 
 internal sealed record ResourceHit(
     string Kind,

@@ -1,2 +1,17 @@
 **/bin/
 **/obj/
+
+# FRX parser diagnostics and generated experiment outputs.
+all_controls_layout_*.json
+inspect_*.json
+label_records.json
+layout_v*.json
+storage_all*.json
+storage_changed.json
+storage_uf3*.json
+stream_*.json
+
+# Generated patched form outputs.
+*.structuredpatched.frm
+*.structuredpatched.frx
+userform_patched.frx
