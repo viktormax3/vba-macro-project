@@ -249,7 +249,7 @@ internal sealed class UserFormProject
         "^\\s*(?<name>[A-Za-z][A-Za-z0-9_]*)\\s*=\\s*(?<value>.*?)\\s*(?:'.*)?$",
         RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly Regex CodeControlNameRegex = new(
-        "(CommandButton|TextBox|CheckBox|Frame|Label|ComboBox|SpinButton|OptionButton|Image)\\d+|CustButton\\d+",
+        "(CommandButton|TextBox|CheckBox|Frame|Label|ComboBox|SpinButton|OptionButton|Image|ToggleButton|ScrollBar|TabStrip|MultiPage|ListBox)\\d+|CustButton\\d+",
         RegexOptions.Compiled);
     private static readonly Regex EventProcedureNameRegex = new(
         "^\\s*Private\\s+Sub\\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)_[A-Za-z][A-Za-z0-9_]*\\b",
@@ -464,6 +464,24 @@ internal sealed class FrxBinary
         ["Image"] = "Image",
         ["CustButton"] = "Custom",
     };
+    private static readonly string[] StandardNamePrefixes =
+    [
+        "CommandButton",
+        "TextBox",
+        "CheckBox",
+        "Frame",
+        "Label",
+        "ComboBox",
+        "SpinButton",
+        "OptionButton",
+        "Image",
+        "ToggleButton",
+        "ScrollBar",
+        "TabStrip",
+        "MultiPage",
+        "ListBox",
+        "CustButton",
+    ];
 
     public required byte[] Bytes { get; init; }
     public required int OleOffset { get; init; }
@@ -591,10 +609,24 @@ internal sealed class FrxBinary
                 continue;
             }
 
-            foreach (var control in ReadStructuredControlsFromFStream(stream, knownControlNames, controlScopes))
+            var streamControls = ReadStructuredControlsFromFStream(stream, knownControlNames, controlScopes);
+            var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
+            if (streamControls.Count == 1 && pairedOStream is not null)
+            {
+                streamControls = [EnrichSingleControlFromOStream(streamControls[0], pairedOStream)];
+            }
+
+            foreach (var control in streamControls)
             {
                 controls.TryAdd(control.NameOffset, control);
             }
+        }
+
+        var objectStreams = storage.Streams.Where(s => s.Kind == "Stream" && s.Name == "o").ToList();
+        if (controls.Count == 1 && objectStreams.Count == 1)
+        {
+            var key = controls.Keys.Single();
+            controls[key] = EnrichSingleControlFromOStream(controls[key], objectStreams[0]);
         }
 
         return controls.Values.ToList();
@@ -631,7 +663,7 @@ internal sealed class FrxBinary
                 continue;
             }
 
-            var name = CanonicalizeName(rawName, knownControlNames);
+            var name = NormalizeStructuredName(rawName, knownControlNames);
             var placement = TryReadStreamPlacement(data, stream.FileOffsets, textOffset + rawName.Length);
             if (placement is null)
             {
@@ -652,6 +684,8 @@ internal sealed class FrxBinary
                 ["recordTypeCode"] = $"0x{marker.TypeCode:X2}",
                 ["parser"] = "structuredStorageFStream"
             };
+            var recordEndOffset = FindNextStructuredRecordOffset(data, marker.Offset + 4) ?? data.Length;
+            AddFStreamTextProperties(properties, data, stream.FileOffsets, textOffset, rawName.Length, placement, recordEndOffset);
 
             controls.Add(new ControlInfo(
                 name,
@@ -678,6 +712,119 @@ internal sealed class FrxBinary
         }
 
         return controls;
+    }
+
+    private static StorageEntryDump? FindPairedObjectStream(
+        IReadOnlyList<StorageEntryDump> streams,
+        StorageEntryDump fStream)
+    {
+        foreach (var stream in streams.Where(s => s.Index > fStream.Index).OrderBy(s => s.Index))
+        {
+            if (stream.Name == "f")
+            {
+                return null;
+            }
+
+            if (stream.Kind == "Stream" && stream.Name == "o")
+            {
+                return stream;
+            }
+        }
+
+        return null;
+    }
+
+    private ControlInfo EnrichSingleControlFromOStream(ControlInfo control, StorageEntryDump oStream)
+    {
+        if (oStream.FileOffsets.Length != oStream.Data.Length)
+        {
+            return control;
+        }
+
+        var properties = control.Properties is null
+            ? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
+        properties["objectStreamIndex"] = oStream.Index;
+
+        var oProperties = ReadObjectStreamProperties(oStream);
+        foreach (var (name, value) in oProperties.Properties)
+        {
+            properties[name] = value;
+        }
+
+        return control with
+        {
+            RawWidth = oProperties.Width ?? control.RawWidth,
+            RawHeight = oProperties.Height ?? control.RawHeight,
+            WidthPt = ToPoints(oProperties.Width ?? control.RawWidth),
+            HeightPt = ToPoints(oProperties.Height ?? control.RawHeight),
+            WidthOffset = oProperties.WidthOffset ?? control.WidthOffset,
+            HeightOffset = oProperties.HeightOffset ?? control.HeightOffset,
+            Properties = properties,
+        };
+    }
+
+    private static void AddFStreamTextProperties(
+        Dictionary<string, object?> properties,
+        byte[] data,
+        int[] fileOffsets,
+        int nameOffset,
+        int rawNameLength,
+        Placement placement,
+        int recordEndOffset)
+    {
+        var leftLocalOffset = FindLocalOffset(fileOffsets, placement.LeftOffset);
+        if (leftLocalOffset is null)
+        {
+            return;
+        }
+
+        var tagStart = SkipZeroBytes(data, nameOffset + rawNameLength);
+        if (tagStart < leftLocalOffset.Value && tagStart < recordEndOffset)
+        {
+            var tag = ReadIdentifierLikeText(data, tagStart, Math.Min(leftLocalOffset.Value, recordEndOffset) - tagStart);
+            if (!string.IsNullOrWhiteSpace(tag))
+            {
+                properties["tag"] = tag;
+                properties["tagOffset"] = fileOffsets[tagStart];
+            }
+        }
+
+        var afterTop = leftLocalOffset.Value + 8;
+        var controlTipEnd = Math.Min(recordEndOffset, afterTop + 80);
+        var controlTip = afterTop < controlTipEnd
+            ? FindNextIdentifierLikeText(data, afterTop, controlTipEnd)
+            : null;
+        if (controlTip is not null && !LooksLikeControlNameText(controlTip.Value.Text))
+        {
+            properties["controlTipTextRaw"] = controlTip.Value.Text;
+            properties["controlTipText"] = TrimLikelyPropertySuffix(controlTip.Value.Text);
+            properties["controlTipTextOffset"] = fileOffsets[controlTip.Value.Offset];
+        }
+    }
+
+    private static int? FindNextStructuredRecordOffset(byte[] data, int startOffset)
+    {
+        for (var offset = Math.Max(0, startOffset); offset + 4 < data.Length; offset++)
+        {
+            var tabIndex = data[offset];
+            var typeCode = data[offset + 2];
+            if (data[offset + 1] != 0 ||
+                data[offset + 3] != 0 ||
+                tabIndex > 0x7F ||
+                !TryGetMsFormsType(typeCode, out _))
+            {
+                continue;
+            }
+
+            var text = FindFirstIdentifierLikeTextOffset(data, offset + 4, Math.Min(data.Length, offset + 32));
+            if (text is not null)
+            {
+                return offset;
+            }
+        }
+
+        return null;
     }
 
     private static ControlTypeMarker? FindStructuredMarkerBefore(byte[] data, int textOffset)
@@ -735,6 +882,119 @@ internal sealed class FrxBinary
         }
 
         return null;
+    }
+
+    private ObjectStreamProperties ReadObjectStreamProperties(StorageEntryDump stream)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["objectStreamSize"] = stream.Size,
+        };
+
+        var data = stream.Data;
+        var colors = FindSystemColors(data, stream.FileOffsets);
+        if (colors.Count > 0)
+        {
+            properties["systemColors"] = colors;
+            var backColor = colors.FirstOrDefault(c => c.Value.Equals("&H8000000D&", StringComparison.OrdinalIgnoreCase));
+            var foreColor = colors.FirstOrDefault(c => c.Value.Equals("&H80000006&", StringComparison.OrdinalIgnoreCase));
+            if (backColor is not null)
+            {
+                properties["backColor"] = backColor.Value;
+                properties["backColorOffset"] = backColor.Offset;
+            }
+
+            if (foreColor is not null)
+            {
+                properties["foreColor"] = foreColor.Value;
+                properties["foreColorOffset"] = foreColor.Offset;
+            }
+        }
+
+        var textRuns = FindTextRuns(data, minLength: 3);
+        TextRun? fontRun = null;
+        foreach (var run in textRuns)
+        {
+            if (run.Text.Contains(' ', StringComparison.Ordinal))
+            {
+                fontRun = run;
+            }
+        }
+
+        if (fontRun is not null)
+        {
+            properties["fontName"] = fontRun.Value.Text;
+            properties["fontNameOffset"] = stream.FileOffsets[fontRun.Value.Offset];
+            var fontSize = FindFontSizeBefore(data, fontRun.Value.Offset);
+            if (fontSize is not null)
+            {
+                properties["fontSize"] = fontSize.Value.Size;
+                properties["fontSizeRaw"] = fontSize.Value.Raw;
+                properties["fontSizeOffset"] = stream.FileOffsets[fontSize.Value.Offset];
+                if (fontSize.Value.Offset >= 4)
+                {
+                    properties["fontStyleRawHex"] = Convert.ToHexString(data.AsSpan(fontSize.Value.Offset - 4, 4));
+                    properties["fontStyleRawOffset"] = stream.FileOffsets[fontSize.Value.Offset - 4];
+                }
+            }
+        }
+
+        TextRun? captionRun = null;
+        foreach (var run in textRuns)
+        {
+            if (fontRun is not null && run.Offset == fontRun.Value.Offset)
+            {
+                continue;
+            }
+
+            if (run.Text.Equals("Tahoma", StringComparison.OrdinalIgnoreCase) ||
+                run.Text.Equals("Times New Roman", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            captionRun = run;
+            break;
+        }
+
+        int? width = null;
+        int? height = null;
+        int? widthOffset = null;
+        int? heightOffset = null;
+        if (captionRun is not null)
+        {
+            var dimensions = FindPlausiblePair(data, captionRun.Value.Offset + captionRun.Value.Text.Length, 12);
+            if (dimensions is not null)
+            {
+                var captionBytesLength = Math.Max(0, dimensions.Value.Offset - captionRun.Value.Offset);
+                var rawCaption = Encoding.Latin1.GetString(data, captionRun.Value.Offset, captionBytesLength);
+                var caption = TrimLikelyPropertySuffix(rawCaption);
+                var trailingFlags = rawCaption.Length > caption.Length ? rawCaption[caption.Length..] : null;
+                properties["captionRaw"] = rawCaption;
+                properties["caption"] = caption;
+                properties["captionOffset"] = stream.FileOffsets[captionRun.Value.Offset];
+                if (captionRun.Value.Offset >= 2 && IsPrintableAscii(data[captionRun.Value.Offset - 2]))
+                {
+                    properties["accelerator"] = Encoding.Latin1.GetString(data, captionRun.Value.Offset - 2, 1);
+                    properties["acceleratorOffset"] = stream.FileOffsets[captionRun.Value.Offset - 2];
+                }
+
+                if (!string.IsNullOrEmpty(trailingFlags))
+                {
+                    properties["captionTrailingFlags"] = trailingFlags;
+                    properties["default"] = trailingFlags.Contains('P', StringComparison.Ordinal);
+                    properties["cancel"] = trailingFlags.Contains('C', StringComparison.Ordinal);
+                }
+
+                width = dimensions.Value.First;
+                height = dimensions.Value.Second;
+                widthOffset = stream.FileOffsets[dimensions.Value.Offset];
+                heightOffset = stream.FileOffsets[dimensions.Value.Offset + 4];
+                properties["sizeSource"] = "objectStream";
+            }
+        }
+
+        return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
     }
 
     private static IReadOnlyList<ControlInfo> AnnotateRecordOrder(IReadOnlyList<ControlInfo> controls)
@@ -1135,6 +1395,49 @@ internal sealed class FrxBinary
         return binaryName;
     }
 
+    private static string NormalizeStructuredName(string binaryName, IReadOnlySet<string>? knownControlNames)
+    {
+        var known = CanonicalizeName(binaryName, knownControlNames);
+        if (!known.Equals(binaryName, StringComparison.OrdinalIgnoreCase))
+        {
+            return known;
+        }
+
+        foreach (var prefix in StandardNamePrefixes.OrderByDescending(prefix => prefix.Length))
+        {
+            if (!binaryName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var digitOffset = prefix.Length;
+            var offset = digitOffset;
+            while (offset < binaryName.Length && char.IsDigit(binaryName[offset]))
+            {
+                offset++;
+            }
+
+            if (offset == digitOffset || offset == binaryName.Length)
+            {
+                continue;
+            }
+
+            var candidate = binaryName[..offset];
+            if (knownControlNames?.Contains(candidate) == true)
+            {
+                return candidate;
+            }
+
+            var suffix = binaryName[offset..];
+            if (suffix.Length <= 3 && suffix.All(char.IsLower))
+            {
+                return candidate;
+            }
+        }
+
+        return binaryName;
+    }
+
     private static bool IsKnownNonControlIdentifier(string name) =>
         name.Equals("Tahoma", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Forms", StringComparison.OrdinalIgnoreCase) ||
@@ -1167,6 +1470,191 @@ internal sealed class FrxBinary
         }
 
         return Encoding.Latin1.GetString(data, offset, end - offset);
+    }
+
+    private static int SkipZeroBytes(byte[] data, int offset)
+    {
+        while (offset < data.Length && data[offset] == 0)
+        {
+            offset++;
+        }
+
+        return offset;
+    }
+
+    private static int? FindLocalOffset(int[] fileOffsets, int fileOffset)
+    {
+        for (var i = 0; i < fileOffsets.Length; i++)
+        {
+            if (fileOffsets[i] == fileOffset)
+            {
+                return i;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadIdentifierLikeText(byte[] data, int offset, int maxLength)
+    {
+        if (offset >= data.Length || !IsPrintableAscii(data[offset]))
+        {
+            return null;
+        }
+
+        var end = offset;
+        var limit = Math.Min(data.Length, offset + maxLength);
+        while (end < limit && IsPrintableAscii(data[end]) && data[end] != 0)
+        {
+            end++;
+        }
+
+        return end - offset < 3 ? null : Encoding.Latin1.GetString(data, offset, end - offset);
+    }
+
+    private static TextRun? FindNextIdentifierLikeText(byte[] data, int start, int end)
+    {
+        foreach (var run in FindTextRuns(data, 3).Where(run => run.Offset >= start && run.Offset < end))
+        {
+            return run;
+        }
+
+        return null;
+    }
+
+    private static int? FindFirstIdentifierLikeTextOffset(byte[] data, int start, int end)
+    {
+        var limit = Math.Min(data.Length, end);
+        for (var offset = start; offset < limit; offset++)
+        {
+            if (!IsIdentifierStart(data[offset]))
+            {
+                continue;
+            }
+
+            var text = ReadIdentifierLikeText(data, offset, limit - offset);
+            if (text is not null)
+            {
+                return offset;
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<TextRun> FindTextRuns(byte[] data, int minLength)
+    {
+        var runs = new List<TextRun>();
+        var offset = 0;
+        while (offset < data.Length)
+        {
+            if (!IsPrintableAscii(data[offset]))
+            {
+                offset++;
+                continue;
+            }
+
+            var start = offset;
+            while (offset < data.Length && IsPrintableAscii(data[offset]))
+            {
+                offset++;
+            }
+
+            var length = offset - start;
+            if (length >= minLength)
+            {
+                runs.Add(new TextRun(start, Encoding.Latin1.GetString(data, start, length)));
+            }
+        }
+
+        return runs;
+    }
+
+    private static string TrimLikelyPropertySuffix(string value)
+    {
+        if (value.Length > 6 &&
+            value[^2] is >= 'A' and <= 'Z' &&
+            char.IsLetter(value[^1]) &&
+            char.IsLower(value[^3]))
+        {
+            return value[..^2];
+        }
+
+        return value;
+    }
+
+    private static bool LooksLikeControlNameText(string value)
+    {
+        foreach (var prefix in StandardNamePrefixes)
+        {
+            if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var offset = prefix.Length;
+            var digitCount = 0;
+            while (offset < value.Length && char.IsDigit(value[offset]))
+            {
+                offset++;
+                digitCount++;
+            }
+
+            if (digitCount > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static PairCandidate? FindPlausiblePair(byte[] data, int start, int maxDistance)
+    {
+        var end = Math.Min(data.Length - 8, start + maxDistance);
+        for (var offset = start; offset <= end; offset++)
+        {
+            var first = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4));
+            var second = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset + 4, 4));
+            if (IsPlausiblePosition(first) && IsPlausiblePosition(second))
+            {
+                return new PairCandidate(offset, first, second);
+            }
+        }
+
+        return null;
+    }
+
+    private static FontSizeCandidate? FindFontSizeBefore(byte[] data, int fontNameOffset)
+    {
+        for (var offset = fontNameOffset - 4; offset >= Math.Max(0, fontNameOffset - 24); offset--)
+        {
+            var raw = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4));
+            if (raw is >= 100 and <= 1000)
+            {
+                return new FontSizeCandidate(offset, raw, Math.Round(raw / 20.0, 2));
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<SystemColorValue> FindSystemColors(byte[] data, int[] fileOffsets)
+    {
+        var colors = new List<SystemColorValue>();
+        for (var offset = 0; offset + 4 <= data.Length; offset++)
+        {
+            var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset, 4));
+            if ((value & 0xFF000000) == 0x80000000)
+            {
+                colors.Add(new SystemColorValue(offset, fileOffsets[offset], $"&H{value:X8}&"));
+            }
+        }
+
+        return colors
+            .GroupBy(color => color.Offset)
+            .Select(group => group.First())
+            .ToList();
     }
 
     private static bool IsIdentifierStart(byte value) =>
@@ -1357,6 +1845,21 @@ internal sealed record Placement(
 internal sealed record ContainerDimensions(int Width, int Height, int WidthOffset, int HeightOffset);
 
 internal sealed record ControlTypeMarker(int Offset, byte TabIndex, byte TypeCode);
+
+internal sealed record ObjectStreamProperties(
+    Dictionary<string, object?> Properties,
+    int? Width,
+    int? Height,
+    int? WidthOffset,
+    int? HeightOffset);
+
+internal readonly record struct TextRun(int Offset, string Text);
+
+internal readonly record struct PairCandidate(int Offset, int First, int Second);
+
+internal readonly record struct FontSizeCandidate(int Offset, int Raw, double Size);
+
+internal sealed record SystemColorValue(int StreamOffset, int Offset, string Value);
 
 internal static class CompoundStorageInspector
 {

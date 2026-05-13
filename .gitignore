@@ -14,4 +14,7 @@ stream_*.json
 # Generated patched form outputs.
 *.structuredpatched.frm
 *.structuredpatched.frx
+*.massrename.frm
+*.massrename.frx
 userform_patched.frx
+mass_rename_*.patch.json
