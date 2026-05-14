@@ -6,6 +6,9 @@ all_controls_layout_*.json
 inspect_*.json
 *.inspect.json
 *.raw.json
+*.storage.json
+*.streamrecords.json
+MS-OFORMS.*.txt
 label_records.json
 layout_v*.json
 storage_all*.json
@@ -18,5 +21,8 @@ stream_*.json
 *.structuredpatched.frx
 *.massrename.frm
 *.massrename.frx
+*.propspatched.frm
+*.propspatched.frx
 userform_patched.frx
 mass_rename_*.patch.json
+property_test.patch.json

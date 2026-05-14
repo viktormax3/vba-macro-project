@@ -36,11 +36,20 @@ Position fields are emitted twice: raw FRX units (`left`, `top`) and normalized 
       "left": 120,
       "top": 180
     }
+  },
+  "properties": {
+    "BtnExtraer": {
+      "caption": "Extraer",
+      "fontSize": 10,
+      "backColor": "&H8000000F&"
+    }
   }
 }
 ```
 
 `apply` writes copies: the original `.frm/.frx` are not modified. The output `.frm` points its `OleObjectBlob` at the sibling output `.frx`.
+Property writes are conservative and in-place. This currently supports discovered writable offsets such as `caption`, `tag`, `controlTipText`, `fontName`, `fontSize`, `backColor`, `foreColor`, and `tabIndex`; strings must fit in the existing binary field until stream growth is implemented.
+`CommandButton` object streams are parsed from the `[MS-OFORMS]` `CommandButtonControl` layout (`PropMask`, `DataBlock`, `ExtraDataBlock`, and `TextProps`) instead of nearby-byte guessing.
 
 ## Current v1 limits
 
