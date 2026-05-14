@@ -161,17 +161,27 @@
         }
 
         var controls = new Dictionary<int, ControlInfo>();
-        foreach (var stream in storage.Streams.Where(s => s.Kind == "Stream" && s.Name == "f"))
+        var pendingContainerOwners = new Queue<string>();
+        var fStreams = storage.Streams
+            .Where(s => s.Kind == "Stream" && s.Name == "f")
+            .OrderBy(s => s.Index)
+            .ToList();
+        for (var streamIndex = 0; streamIndex < fStreams.Count; streamIndex++)
         {
+            var stream = fStreams[streamIndex];
             if (stream.FileOffsets.Length != stream.Data.Length)
             {
                 continue;
             }
 
-            var streamRecords = ReadStructuredControlRecordsFromFStream(stream, knownControlNames);
-            var streamControls = streamRecords
-                .Select(record => BuildControlInfo(record, controlScopes))
-                .ToList();
+            string? streamOwner = null;
+            if (streamIndex > 0 && pendingContainerOwners.Count > 0)
+            {
+                streamOwner = pendingContainerOwners.Dequeue();
+            }
+
+            var streamRecords = FormStreamParser.Read(stream, knownControlNames);
+            var streamControls = BuildControlInfos(streamRecords, streamOwner, controlScopes);
             var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
             if (streamControls.Count == 1 && pairedOStream is not null)
             {
@@ -181,6 +191,10 @@
             foreach (var control in streamControls)
             {
                 controls.TryAdd(control.NameOffset, control);
+                if (HasOwnStorage(control))
+                {
+                    pendingContainerOwners.Enqueue(control.Name);
+                }
             }
         }
 
@@ -194,79 +208,43 @@
         return controls.Values.ToList();
     }
 
-    private IReadOnlyList<StructuredControlRecord> ReadStructuredControlRecordsFromFStream(
-        StorageEntryDump stream,
-        IReadOnlySet<string>? knownControlNames)
+    private IReadOnlyList<ControlInfo> BuildControlInfos(
+        IReadOnlyList<StructuredControlRecord> records,
+        string? streamOwner,
+        IReadOnlyDictionary<string, string>? controlScopes)
     {
-        var data = stream.Data;
-        var candidates = new List<StructuredControlCandidate>();
-        for (var textOffset = 4; textOffset < data.Length; textOffset++)
+        var controls = new List<ControlInfo>(records.Count);
+        var depthParents = new Dictionary<int, string>();
+        foreach (var record in records)
         {
-            if (!IsPrintableAscii(data[textOffset]))
-            {
-                continue;
-            }
+            var depth = GetSiteDepth(record.SiteProperties);
+            var parent = depth == 0
+                ? streamOwner
+                : depthParents.TryGetValue(depth - 1, out var nestedParent)
+                    ? nestedParent
+                    : streamOwner;
+            var control = BuildControlInfo(record, parent, controlScopes);
+            controls.Add(control);
+            depthParents[depth] = control.Name;
 
-            if (textOffset > 0 && IsIdentifierPart(data[textOffset - 1]))
+            foreach (var deeperDepth in depthParents.Keys.Where(key => key > depth).ToList())
             {
-                continue;
+                depthParents.Remove(deeperDepth);
             }
-
-            var marker = FindStructuredMarkerBefore(data, textOffset);
-            if (marker is null || !TryGetMsFormsType(marker.TypeCode, out var type))
-            {
-                continue;
-            }
-
-            var rawName = ReadNullTerminatedAscii(data, textOffset, maxLength: 64);
-            if (rawName is null || IsKnownNonControlIdentifier(rawName))
-            {
-                continue;
-            }
-
-            var name = NormalizeStructuredName(rawName, knownControlNames);
-            var placement = TryReadStreamPlacement(data, stream.FileOffsets, textOffset + rawName.Length);
-            if (placement is null)
-            {
-                continue;
-            }
-
-            candidates.Add(new StructuredControlCandidate(marker, textOffset, rawName, name, type, placement));
         }
 
-        candidates = candidates
-            .OrderBy(candidate => candidate.NameOffset)
-            .ToList();
-
-        var records = new List<StructuredControlRecord>();
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var candidate = candidates[i];
-            var endOffset = i + 1 < candidates.Count ? candidates[i + 1].Marker.Offset : data.Length;
-            records.Add(new StructuredControlRecord(
-                stream,
-                candidate.Marker,
-                candidate.Marker.Offset,
-                endOffset,
-                candidate.NameOffset,
-                candidate.RawName.Length,
-                candidate.RawName,
-                candidate.Name,
-                candidate.Type,
-                candidate.Placement,
-                ObjectStream: null));
-        }
-
-        return records;
+        return controls;
     }
 
     private ControlInfo BuildControlInfo(
         StructuredControlRecord record,
+        string? siteParent,
         IReadOnlyDictionary<string, string>? controlScopes)
     {
-        var markerOffset = record.Stream.FileOffsets[record.RecordStartOffset];
+        var recordStartOffset = record.Stream.FileOffsets[record.RecordStartOffset];
+        var markerOffset = record.Stream.FileOffsets[record.Marker.Offset];
         var nameOffset = record.Stream.FileOffsets[record.NameOffset];
-        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        var properties = new Dictionary<string, object?>(record.SiteProperties, StringComparer.OrdinalIgnoreCase)
         {
             ["streamName"] = record.Stream.Name,
             ["streamIndex"] = record.Stream.Index,
@@ -276,11 +254,12 @@
             ["nameLength"] = record.NameLength,
             ["recordMarkerHex"] = ReadHex(markerOffset, 4),
             ["recordMarkerOffset"] = markerOffset,
+            ["recordStartOffset"] = recordStartOffset,
             ["streamLocalRecordMarkerOffset"] = record.Marker.Offset,
             ["tabIndex"] = record.Marker.TabIndex,
             ["recordTypeCode"] = $"0x{record.Marker.TypeCode:X2}",
-            ["parser"] = "structuredStorageFStream"
         };
+        properties.TryAdd("parser", "structuredStorageFStream");
         AddFStreamTextProperties(properties, record);
 
         return new ControlInfo(
@@ -295,7 +274,7 @@
             null,
             null,
             properties,
-            controlScopes?.TryGetValue(record.Name, out var scope) == true ? scope : null,
+            siteParent ?? (controlScopes?.TryGetValue(record.Name, out var scope) == true ? scope : null),
             record.RawName.Equals(record.Name, StringComparison.OrdinalIgnoreCase) ? null : record.RawName,
             null,
             null,
@@ -305,6 +284,33 @@
             record.Placement.TopOffset,
             record.Placement.WidthOffset,
             record.Placement.HeightOffset);
+    }
+
+    private static int GetSiteDepth(Dictionary<string, object?> properties)
+    {
+        if (properties.TryGetValue("siteDepth", out var value))
+        {
+            return value switch
+            {
+                byte b => b,
+                int i => i,
+                JsonElement { ValueKind: JsonValueKind.Number } element when element.TryGetInt32(out var i) => i,
+                _ => 0,
+            };
+        }
+
+        return 0;
+    }
+
+    private static bool HasOwnStorage(ControlInfo control)
+    {
+        if (control.Properties?.TryGetValue("streamed", out var streamed) == true && streamed is bool streamedValue)
+        {
+            return !streamedValue;
+        }
+
+        return control.Type.Equals("Frame", StringComparison.OrdinalIgnoreCase) ||
+            control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase);
     }
 
     private static StorageEntryDump? FindPairedObjectStream(
@@ -339,9 +345,15 @@
             : new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
         properties["objectStreamIndex"] = oStream.Index;
 
-        var oProperties = ReadObjectStreamProperties(oStream, control.Type);
+        var oProperties = ObjectStreamParser.Read(oStream, control.Type);
         foreach (var (name, value) in oProperties.Properties)
         {
+            if (name.Equals("parser", StringComparison.OrdinalIgnoreCase) && properties.ContainsKey("siteParser"))
+            {
+                properties["objectParser"] = value;
+                continue;
+            }
+
             properties[name] = value;
         }
 
@@ -377,7 +389,7 @@
         if (tagStart < leftLocalOffset.Value && tagStart < recordEndOffset)
         {
             var tag = ReadIdentifierLikeText(data, tagStart, Math.Min(leftLocalOffset.Value, recordEndOffset) - tagStart);
-            if (!string.IsNullOrWhiteSpace(tag))
+            if (!string.IsNullOrWhiteSpace(tag) && !properties.ContainsKey("tag"))
             {
                 properties["tag"] = tag;
                 properties["tagOffset"] = fileOffsets[tagStart];
@@ -391,9 +403,9 @@
             : null;
         if (controlTip is not null)
         {
-            properties["controlTipTextRaw"] = controlTip.Value.Text;
-            properties["controlTipText"] = TrimLikelyPropertySuffix(controlTip.Value.Text);
-            properties["controlTipTextOffset"] = fileOffsets[controlTip.Value.Offset];
+            properties.TryAdd("controlTipTextRaw", controlTip.Value.Text);
+            properties.TryAdd("controlTipText", TrimLikelyPropertySuffix(controlTip.Value.Text));
+            properties.TryAdd("controlTipTextOffset", fileOffsets[controlTip.Value.Offset]);
         }
     }
 
@@ -452,411 +464,6 @@
         }
 
         return null;
-    }
-
-    private ObjectStreamProperties ReadObjectStreamProperties(StorageEntryDump stream, string? controlType = null)
-    {
-        if (controlType?.Equals("CommandButton", StringComparison.OrdinalIgnoreCase) == true &&
-            TryReadCommandButtonObjectStream(stream) is { } commandButton)
-        {
-            return commandButton;
-        }
-
-        return ReadObjectStreamPropertiesHeuristic(stream);
-    }
-
-    private ObjectStreamProperties ReadObjectStreamPropertiesHeuristic(StorageEntryDump stream)
-    {
-        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["objectStreamSize"] = stream.Size,
-        };
-
-        var data = stream.Data;
-        var colors = FindSystemColors(data, stream.FileOffsets);
-        if (colors.Count > 0)
-        {
-            properties["systemColors"] = colors;
-            if (data.Length >= 16 && data[2] == 0x40)
-            {
-                var foreColor = colors.FirstOrDefault(c => c.StreamOffset == 8);
-                var backColor = colors.FirstOrDefault(c => c.StreamOffset == 12);
-                if (backColor is not null)
-                {
-                    properties["backColor"] = backColor.Value;
-                    properties["backColorOffset"] = backColor.Offset;
-                }
-
-                if (foreColor is not null)
-                {
-                    properties["foreColor"] = foreColor.Value;
-                    properties["foreColorOffset"] = foreColor.Offset;
-                }
-            }
-        }
-
-        var textRuns = FindTextRuns(data, minLength: 3);
-        TextRun? fontRun = FindFontNameRun(data, textRuns);
-
-        if (fontRun is not null)
-        {
-            properties["fontName"] = fontRun.Value.Text;
-            properties["fontNameOffset"] = stream.FileOffsets[fontRun.Value.Offset];
-            var fontSize = FindFontSizeBefore(data, fontRun.Value.Offset);
-            if (fontSize is not null)
-            {
-                properties["fontSize"] = fontSize.Value.Size;
-                properties["fontSizeRaw"] = fontSize.Value.Raw;
-                properties["fontSizeOffset"] = stream.FileOffsets[fontSize.Value.Offset];
-                if (fontSize.Value.Offset >= 4)
-                {
-                    properties["fontStyleRawHex"] = Convert.ToHexString(data.AsSpan(fontSize.Value.Offset - 4, 4));
-                    properties["fontStyleRawOffset"] = stream.FileOffsets[fontSize.Value.Offset - 4];
-                }
-            }
-        }
-
-        TextRun? captionRun = null;
-        foreach (var run in textRuns)
-        {
-            if (fontRun is not null && run.Offset == fontRun.Value.Offset)
-            {
-                continue;
-            }
-
-            if (run.Text.Equals("Tahoma", StringComparison.OrdinalIgnoreCase) ||
-                run.Text.Equals("Times New Roman", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            captionRun = run;
-            break;
-        }
-
-        int? width = null;
-        int? height = null;
-        int? widthOffset = null;
-        int? heightOffset = null;
-        if (captionRun is not null)
-        {
-            var dimensions = FindPlausiblePair(data, captionRun.Value.Offset + captionRun.Value.Text.Length, 12);
-            if (dimensions is not null)
-            {
-                var captionBytesLength = Math.Max(0, dimensions.Value.Offset - captionRun.Value.Offset);
-                var rawCaption = Encoding.Latin1.GetString(data, captionRun.Value.Offset, captionBytesLength);
-                var caption = TrimLikelyPropertySuffix(rawCaption);
-                var trailingFlags = GetPrintableFlagSuffix(rawCaption, caption.Length);
-                properties["captionRaw"] = rawCaption;
-                properties["caption"] = caption;
-                properties["captionOffset"] = stream.FileOffsets[captionRun.Value.Offset];
-                if (captionRun.Value.Offset >= 2 && IsPrintableAscii(data[captionRun.Value.Offset - 2]))
-                {
-                    properties["accelerator"] = Encoding.Latin1.GetString(data, captionRun.Value.Offset - 2, 1);
-                    properties["acceleratorOffset"] = stream.FileOffsets[captionRun.Value.Offset - 2];
-                }
-
-                if (!string.IsNullOrEmpty(trailingFlags))
-                {
-                    properties["captionTrailingFlags"] = trailingFlags;
-                    properties["default"] = trailingFlags.Contains('P', StringComparison.Ordinal);
-                    properties["cancel"] = trailingFlags.Contains('C', StringComparison.Ordinal);
-                }
-
-                width = dimensions.Value.First;
-                height = dimensions.Value.Second;
-                widthOffset = stream.FileOffsets[dimensions.Value.Offset];
-                heightOffset = stream.FileOffsets[dimensions.Value.Offset + 4];
-                properties["sizeSource"] = "objectStream";
-            }
-        }
-
-        return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
-    }
-
-    private static ObjectStreamProperties? TryReadCommandButtonObjectStream(StorageEntryDump stream)
-    {
-        var data = stream.Data;
-        if (data.Length < 8 || data[0] != 0x00 || data[1] != 0x02)
-        {
-            return null;
-        }
-
-        var cbCommandButton = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
-        if (cbCommandButton < 4 || 4 + cbCommandButton > data.Length)
-        {
-            return null;
-        }
-
-        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4));
-        var cursor = 8;
-        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["objectStreamSize"] = stream.Size,
-            ["parser"] = "msOFormsCommandButton",
-            ["minorVersion"] = data[0],
-            ["majorVersion"] = data[1],
-            ["cbCommandButton"] = cbCommandButton,
-            ["commandButtonPropMask"] = $"0x{propMask:X8}",
-            ["commandButtonPropMaskOffset"] = stream.FileOffsets[4],
-        };
-
-        CountOfBytesWithCompressionFlag? captionCount = null;
-        if (HasBit(propMask, 0))
-        {
-            ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "foreColor", properties, formatColor: true);
-        }
-
-        if (HasBit(propMask, 1))
-        {
-            ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, formatColor: true);
-        }
-
-        if (HasBit(propMask, 2))
-        {
-            var value = ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "variousPropertyBitsRaw", properties);
-            properties["variousPropertyBits"] = $"0x{value:X8}";
-            AddVariousPropertyBits(properties, value);
-        }
-
-        if (HasBit(propMask, 3))
-        {
-            Align(ref cursor, 4);
-            var raw = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-            captionCount = DecodeCountOfBytesWithCompressionFlag(raw);
-            properties["captionByteCount"] = captionCount.Value.Count;
-            properties["captionCompressed"] = captionCount.Value.Compressed;
-            properties["captionCountOffset"] = stream.FileOffsets[cursor];
-            cursor += 4;
-        }
-
-        if (HasBit(propMask, 4))
-        {
-            ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "picturePosition", properties);
-        }
-
-        // fSize is stored in the ExtraDataBlock, not the DataBlock.
-        if (HasBit(propMask, 6))
-        {
-            properties["mousePointer"] = ReadByte(data, stream.FileOffsets, ref cursor, "mousePointer", properties);
-        }
-
-        if (HasBit(propMask, 7))
-        {
-            ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "pictureMarker", properties);
-        }
-
-        if (HasBit(propMask, 8))
-        {
-            var accelerator = ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "acceleratorCodeUnit", properties);
-            if (accelerator != 0)
-            {
-                properties["accelerator"] = char.ConvertFromUtf32(accelerator);
-                properties["acceleratorOffset"] = properties["acceleratorCodeUnitOffset"];
-            }
-        }
-
-        if (HasBit(propMask, 9))
-        {
-            properties["takeFocusOnClick"] = true;
-        }
-
-        if (HasBit(propMask, 10))
-        {
-            ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "mouseIconMarker", properties);
-        }
-
-        Align(ref cursor, 4);
-
-        int? width = null;
-        int? height = null;
-        int? widthOffset = null;
-        int? heightOffset = null;
-        if (captionCount is not null)
-        {
-            var captionOffset = cursor;
-            var caption = ReadFmString(data, captionOffset, captionCount.Value);
-            properties["caption"] = caption;
-            properties["captionRaw"] = caption;
-            properties["captionOffset"] = stream.FileOffsets[captionOffset];
-            cursor += captionCount.Value.Count;
-            Align(ref cursor, 4);
-        }
-
-        if (HasBit(propMask, 5))
-        {
-            Align(ref cursor, 4);
-            if (cursor + 8 > data.Length)
-            {
-                return null;
-            }
-
-            width = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
-            height = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor + 4, 4));
-            widthOffset = stream.FileOffsets[cursor];
-            heightOffset = stream.FileOffsets[cursor + 4];
-            properties["sizeSource"] = "commandButtonExtraDataBlock";
-            cursor += 8;
-        }
-
-        var colors = FindSystemColors(data, stream.FileOffsets);
-        if (colors.Count > 0)
-        {
-            properties["systemColors"] = colors;
-        }
-
-        AddTextPropsHeuristic(data, stream.FileOffsets, properties);
-        return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
-    }
-
-    private static void AddTextPropsHeuristic(byte[] data, int[] fileOffsets, Dictionary<string, object?> properties)
-    {
-        var textRuns = FindTextRuns(data, minLength: 3);
-        var fontRun = FindFontNameRun(data, textRuns);
-        if (fontRun is null)
-        {
-            return;
-        }
-
-        properties["fontName"] = fontRun.Value.Text;
-        properties["fontNameOffset"] = fileOffsets[fontRun.Value.Offset];
-        var fontSize = FindFontSizeBefore(data, fontRun.Value.Offset);
-        if (fontSize is null)
-        {
-            return;
-        }
-
-        properties["fontSize"] = fontSize.Value.Size;
-        properties["fontSizeRaw"] = fontSize.Value.Raw;
-        properties["fontSizeOffset"] = fileOffsets[fontSize.Value.Offset];
-        if (fontSize.Value.Offset >= 4)
-        {
-            properties["fontStyleRawHex"] = Convert.ToHexString(data.AsSpan(fontSize.Value.Offset - 4, 4));
-            properties["fontStyleRawOffset"] = fileOffsets[fontSize.Value.Offset - 4];
-        }
-    }
-
-    private static void AddVariousPropertyBits(Dictionary<string, object?> properties, uint value)
-    {
-        properties["enabled"] = HasBit(value, 1);
-        properties["locked"] = HasBit(value, 2);
-        properties["backStyle"] = HasBit(value, 3) ? 1 : 0;
-        properties["wordWrap"] = HasBit(value, 23);
-        properties["autoSize"] = HasBit(value, 28);
-    }
-
-    private static uint ReadAlignedUInt32(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        int alignment,
-        string property,
-        Dictionary<string, object?> properties,
-        bool formatColor = false)
-    {
-        Align(ref cursor, alignment);
-        var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-        properties[property] = formatColor ? $"&H{value:X8}&" : value;
-        properties[$"{property}Offset"] = fileOffsets[cursor];
-        cursor += 4;
-        return value;
-    }
-
-    private static ushort ReadAlignedUInt16(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        string property,
-        Dictionary<string, object?> properties)
-    {
-        Align(ref cursor, 2);
-        var value = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-        properties[property] = value;
-        properties[$"{property}Offset"] = fileOffsets[cursor];
-        cursor += 2;
-        return value;
-    }
-
-    private static byte ReadByte(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        string property,
-        Dictionary<string, object?> properties)
-    {
-        var value = data[cursor];
-        properties[property] = value;
-        properties[$"{property}Offset"] = fileOffsets[cursor];
-        cursor++;
-        return value;
-    }
-
-    private static void Align(ref int cursor, int alignment)
-    {
-        var remainder = cursor % alignment;
-        if (remainder != 0)
-        {
-            cursor += alignment - remainder;
-        }
-    }
-
-    private static bool HasBit(uint value, int bit) => (value & (1u << bit)) != 0;
-
-    private static CountOfBytesWithCompressionFlag DecodeCountOfBytesWithCompressionFlag(uint value) =>
-        new((int)(value & 0x7FFF_FFFF), (value & 0x8000_0000) != 0);
-
-    private static string ReadFmString(byte[] data, int offset, CountOfBytesWithCompressionFlag count)
-    {
-        if (count.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        if (offset + count.Count > data.Length)
-        {
-            return string.Empty;
-        }
-
-        var text = count.Compressed
-            ? Encoding.Latin1.GetString(data, offset, count.Count)
-            : Encoding.Unicode.GetString(data, offset, count.Count);
-        return TrimTrailingBinaryChars(text);
-    }
-
-    private static TextRun? FindFontNameRun(byte[] data, IReadOnlyList<TextRun> textRuns)
-    {
-        foreach (var run in textRuns.OrderByDescending(run => run.Offset))
-        {
-            if (IsKnownFontName(run.Text))
-            {
-                return run;
-            }
-
-            if (run.Text.Contains(' ', StringComparison.Ordinal) && IsLikelyFontRun(data, run.Offset))
-            {
-                return run;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsKnownFontName(string value) =>
-        value.Equals("Tahoma", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("Times New Roman", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("Trebuchet MS", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("Verdana", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("Terminal", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsLikelyFontRun(byte[] data, int offset)
-    {
-        if (offset < 8)
-        {
-            return false;
-        }
-
-        var sizeCandidate = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset - 8, 4));
-        return sizeCandidate is >= 100 and <= 720;
     }
 
     private static IReadOnlyList<ControlInfo> AnnotateRecordOrder(IReadOnlyList<ControlInfo> controls)
@@ -1610,38 +1217,6 @@
         }
 
         return null;
-    }
-
-    private static FontSizeCandidate? FindFontSizeBefore(byte[] data, int fontNameOffset)
-    {
-        for (var offset = fontNameOffset - 4; offset >= Math.Max(0, fontNameOffset - 24); offset--)
-        {
-            var raw = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4));
-            if (raw is >= 100 and <= 1000)
-            {
-                return new FontSizeCandidate(offset, raw, Math.Round(raw / 20.0, 2));
-            }
-        }
-
-        return null;
-    }
-
-    private static IReadOnlyList<SystemColorValue> FindSystemColors(byte[] data, int[] fileOffsets)
-    {
-        var colors = new List<SystemColorValue>();
-        for (var offset = 0; offset + 4 <= data.Length; offset++)
-        {
-            var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset, 4));
-            if ((value & 0xFF000000) == 0x80000000)
-            {
-                colors.Add(new SystemColorValue(offset, fileOffsets[offset], $"&H{value:X8}&"));
-            }
-        }
-
-        return colors
-            .GroupBy(color => color.Offset)
-            .Select(group => group.First())
-            .ToList();
     }
 
     private static bool IsIdentifierStart(byte value) =>

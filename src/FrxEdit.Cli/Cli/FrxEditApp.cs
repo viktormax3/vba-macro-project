@@ -35,6 +35,12 @@
         }
         catch (Exception ex)
         {
+            if (Environment.GetEnvironmentVariable("FRXEDIT_DEBUG") == "1")
+            {
+                stderr.WriteLine(ex);
+                return 1;
+            }
+
             stderr.WriteLine($"error: unexpected failure: {ex.Message}");
             return 1;
         }

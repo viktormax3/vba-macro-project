@@ -22,6 +22,15 @@ internal sealed record HumanLayoutDocument(
         "foreColor",
         "fontName",
         "fontSize",
+        "fontEffects",
+        "fontEffectsHex",
+        "fontItalic",
+        "fontUnderline",
+        "fontStrikethrough",
+        "fontCharSet",
+        "fontPitchAndFamily",
+        "paragraphAlign",
+        "fontWeight",
         "default",
         "cancel",
         "enabled",
@@ -145,9 +154,16 @@ internal sealed record HumanLayoutDocument(
             return false;
         }
 
-        return name.Equals("tabIndex", StringComparison.OrdinalIgnoreCase)
-            ? properties.ContainsKey("recordMarkerOffset")
-            : properties.ContainsKey($"{name}Offset");
+        return name.ToLowerInvariant() switch
+        {
+            "caption" or "tag" or "controltiptext" or "fontname" =>
+                properties.ContainsKey($"{name}Offset"),
+            "backcolor" or "forecolor" or "fontsize" =>
+                properties.ContainsKey($"{name}Offset"),
+            "tabindex" =>
+                properties.ContainsKey("recordMarkerOffset"),
+            _ => false
+        };
     }
 }
 
@@ -250,6 +266,7 @@ internal sealed record StructuredControlRecord(
     string Name,
     string Type,
     Placement Placement,
+    Dictionary<string, object?> SiteProperties,
     StorageEntryDump? ObjectStream);
 
 internal sealed record ObjectStreamProperties(
