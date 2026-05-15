@@ -53,6 +53,24 @@ internal static class FormStreamParser
             ["siteNameOffset"] = site.NameOffset < fileOffsets.Length ? fileOffsets[site.NameOffset] : 0,
         };
 
+        if (site.Id != null)
+        {
+            properties["id"] = site.Id;
+            properties["idOffset"] = site.IdOffset < fileOffsets.Length ? fileOffsets[site.IdOffset] : 0;
+        }
+
+        if (site.HelpContextId != null)
+        {
+            properties["helpContextId"] = site.HelpContextId;
+            properties["helpContextIdOffset"] = site.HelpContextIdOffset < fileOffsets.Length ? fileOffsets[site.HelpContextIdOffset] : 0;
+        }
+
+        if (site.GroupId != null)
+        {
+            properties["groupId"] = site.GroupId;
+            properties["groupIdOffset"] = site.GroupIdOffset < fileOffsets.Length ? fileOffsets[site.GroupIdOffset] : 0;
+        }
+
         if (site.TabIndex != null)
         {
             properties["tabIndex"] = site.TabIndex;

@@ -23,12 +23,18 @@ internal sealed class SiteDescriptor
     
     public uint? Id { get; set; }
     public int IdOffset { get; set; }
+
+    public uint? HelpContextId { get; set; }
+    public int HelpContextIdOffset { get; set; }
     
     public ushort? TabIndex { get; set; }
     public int TabIndexOffset { get; set; }
     
     public ushort? ClsidCacheIndex { get; set; }
     public int ClsidCacheIndexOffset { get; set; }
+
+    public ushort? GroupId { get; set; }
+    public int GroupIdOffset { get; set; }
     
     public int? ObjectStreamSize { get; set; }
     public int ObjectStreamSizeOffset { get; set; }

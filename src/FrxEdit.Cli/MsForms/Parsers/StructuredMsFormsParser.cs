@@ -150,17 +150,64 @@ internal static class StructuredMsFormsParser
 
         if (mask.HasName) dataBlock.NameCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
         if (mask.HasTag) dataBlock.TagCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasID) site.Id = ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasHelpContextID) ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasBitFlags) site.BitFlags = ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasObjectStreamSize) site.ObjectStreamSize = (int)ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasTabIndex) site.TabIndex = ReadUInt16(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasClsidCacheIndex) site.ClsidCacheIndex = ReadUInt16(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasGroupID) ReadUInt16(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasControlTipText) dataBlock.ControlTipCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasRuntimeLicKey) dataBlock.RuntimeLicKeyCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasControlSource) dataBlock.ControlSourceCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
-        if (mask.HasRowSource) dataBlock.RowSourceCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
+        if (mask.HasID)
+        {
+            site.IdOffset = dataCursor;
+            site.Id = ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasHelpContextID)
+        {
+            site.HelpContextIdOffset = dataCursor;
+            site.HelpContextId = ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasBitFlags)
+        {
+            site.BitFlagsOffset = dataCursor;
+            site.BitFlags = ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasObjectStreamSize)
+        {
+            site.ObjectStreamSizeOffset = dataCursor;
+            site.ObjectStreamSize = (int)ReadUInt32(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasTabIndex)
+        {
+            site.TabIndexOffset = dataCursor;
+            site.TabIndex = ReadUInt16(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasClsidCacheIndex)
+        {
+            site.ClsidCacheIndexOffset = dataCursor;
+            site.ClsidCacheIndex = ReadUInt16(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasGroupID)
+        {
+            site.GroupIdOffset = dataCursor;
+            site.GroupId = ReadUInt16(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+
+        if (mask.HasControlTipText)
+        {
+            AlignRelative(ref dataCursor, dataBlockStart, 4);
+            dataBlock.ControlTipCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasRuntimeLicKey)
+        {
+            AlignRelative(ref dataCursor, dataBlockStart, 4);
+            dataBlock.RuntimeLicKeyCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasControlSource)
+        {
+            AlignRelative(ref dataCursor, dataBlockStart, 4);
+            dataBlock.ControlSourceCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+        if (mask.HasRowSource)
+        {
+            AlignRelative(ref dataCursor, dataBlockStart, 4);
+            dataBlock.RowSourceCount = ReadCount(data, ref dataCursor, dataBlockStart, siteEnd);
+        }
+
+        AlignRelative(ref dataCursor, dataBlockStart, 4);
 
         if (dataCursor > siteEnd) { cursor = siteEnd; return null; }
 
@@ -169,38 +216,63 @@ internal static class StructuredMsFormsParser
         
         if (mask.HasName)
         {
+            AlignRelative(ref extraCursor, siteStart, 4);
             site.NameOffset = extraCursor;
             site.Name = ReadFmString(data, extraCursor, dataBlock.NameCount, siteEnd);
-            extraCursor += Align4(dataBlock.NameCount.Count);
+            extraCursor += dataBlock.NameCount.Count;
         }
 
         if (mask.HasTag)
         {
+            AlignRelative(ref extraCursor, siteStart, 4);
             site.TagOffset = extraCursor;
             site.Tag = ReadFmString(data, extraCursor, dataBlock.TagCount, siteEnd);
-            extraCursor += Align4(dataBlock.TagCount.Count);
+            extraCursor += dataBlock.TagCount.Count;
         }
 
         if (mask.HasPosition)
         {
-            AlignRelative(ref extraCursor, siteStart, 4); 
+            AlignRelative(ref extraCursor, siteStart, 4);
             if (extraCursor + 8 <= siteEnd)
             {
-                site.LeftOffset = extraCursor;
-                site.Left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor, 4));
-                site.TopOffset = extraCursor + 4;
-                site.Top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor + 4, 4));
+                site.TopOffset = extraCursor;
+                site.Top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor, 4));
+                site.LeftOffset = extraCursor + 4;
+                site.Left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor + 4, 4));
                 extraCursor += 8;
             }
         }
 
         if (mask.HasControlTipText)
         {
+            AlignRelative(ref extraCursor, siteStart, 4);
             site.ExtraProperties["controlTipText"] = ReadFmString(data, extraCursor, dataBlock.ControlTipCount, siteEnd);
-            extraCursor += Align4(dataBlock.ControlTipCount.Count);
+            extraCursor += dataBlock.ControlTipCount.Count;
         }
 
-        cursor = siteEnd;
+        if (mask.HasRuntimeLicKey)
+        {
+            AlignRelative(ref extraCursor, siteStart, 4);
+            site.ExtraProperties["runtimeLicKey"] = ReadFmString(data, extraCursor, dataBlock.RuntimeLicKeyCount, siteEnd);
+            extraCursor += dataBlock.RuntimeLicKeyCount.Count;
+        }
+
+        if (mask.HasControlSource)
+        {
+            AlignRelative(ref extraCursor, siteStart, 4);
+            site.ExtraProperties["controlSource"] = ReadFmString(data, extraCursor, dataBlock.ControlSourceCount, siteEnd);
+            extraCursor += dataBlock.ControlSourceCount.Count;
+        }
+
+        if (mask.HasRowSource)
+        {
+            AlignRelative(ref extraCursor, siteStart, 4);
+            site.ExtraProperties["rowSource"] = ReadFmString(data, extraCursor, dataBlock.RowSourceCount, siteEnd);
+            extraCursor += dataBlock.RowSourceCount.Count;
+        }
+
+        AlignRelative(ref extraCursor, siteStart, 4);
+        cursor = extraCursor;
         return site;
     }
 
