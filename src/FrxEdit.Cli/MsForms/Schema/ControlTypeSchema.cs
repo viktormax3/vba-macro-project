@@ -4,6 +4,7 @@ internal static class ControlTypeSchema
     {
         type = typeCode switch
         {
+            0x07 => "Page",
             0x0C => "Image",
             0x0E => "Frame",
             0x10 => "SpinButton",

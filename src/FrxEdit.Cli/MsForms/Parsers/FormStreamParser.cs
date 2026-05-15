@@ -135,14 +135,18 @@ internal static class FormStreamParser
                 return [];
             }
 
-            records.Add(site);
+            if (site.Record is not null)
+            {
+                records.Add(site.Record);
+            }
+
             cursor = site.RecordEndOffset;
         }
 
         return records;
     }
 
-    private static StructuredControlRecord? TryReadOleSiteConcrete(
+    private static OleSiteRead? TryReadOleSiteConcrete(
         StorageEntryDump stream,
         int siteOffset,
         IReadOnlySet<string>? knownControlNames,
@@ -281,18 +285,21 @@ internal static class FormStreamParser
             return null;
         }
 
-        var extraCursor = cursor;
-        string? rawName = null;
-        var nameOffset = siteOffset;
-        if (nameCount is not null)
+        if (nameCount is null)
         {
-            if (!TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, nameCount.Value, "name", properties, out rawName))
-            {
-                return null;
-            }
-
-            nameOffset = GetInt(properties, "nameOffset") ?? siteOffset;
+            properties["siteSkippedReason"] = "namelessSite";
+            return new OleSiteRead(null, siteEnd);
         }
+
+        var extraCursor = cursor;
+        string rawName;
+        var nameOffset = siteOffset;
+        if (!TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, nameCount.Value, "name", properties, out rawName))
+        {
+            return null;
+        }
+
+        nameOffset = GetInt(properties, "nameOffset") ?? siteOffset;
 
         if (tagCount is not null)
         {
@@ -348,8 +355,7 @@ internal static class FormStreamParser
             _ = TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, rowSourceCount.Value, "rowSource", properties, out _);
         }
 
-        if (rawName is null ||
-            left is null ||
+        if (left is null ||
             top is null ||
             leftOffset is null ||
             topOffset is null ||
@@ -367,19 +373,21 @@ internal static class FormStreamParser
         var placement = new Placement(left.Value, top.Value, null, null, leftOffset.Value, topOffset.Value, null, null);
         properties["parser"] = "msOFormsFormSiteData";
 
-        return new StructuredControlRecord(
-            stream,
-            marker,
-            siteOffset,
-            siteEnd,
-            GetLocalOffset(stream.FileOffsets, nameOffset) ?? siteOffset,
-            rawName.Length,
-            rawName,
-            name,
-            type,
-            placement,
-            properties,
-            ObjectStream: null);
+        return new OleSiteRead(
+            new StructuredControlRecord(
+                stream,
+                marker,
+                siteOffset,
+                siteEnd,
+                GetLocalOffset(stream.FileOffsets, nameOffset) ?? siteOffset,
+                rawName.Length,
+                rawName,
+                name,
+                type,
+                placement,
+                properties,
+                ObjectStream: null),
+            siteEnd);
     }
 
     private static IReadOnlyList<StructuredControlRecord> ReadByStructuredMarkers(
@@ -479,10 +487,28 @@ internal static class FormStreamParser
         }
 
         value = MsFormsBinary.ReadFmString(data, offset, count);
+        if (property.Equals("name", StringComparison.OrdinalIgnoreCase) &&
+            value.StartsWith("Page", StringComparison.OrdinalIgnoreCase))
+        {
+            var suffixOffset = offset + count.Count;
+            while (suffixOffset < siteEnd &&
+                data[suffixOffset] != 0 &&
+                IsIdentifierPart(data[suffixOffset]))
+            {
+                value += Encoding.Latin1.GetString(data, suffixOffset, 1);
+                suffixOffset++;
+            }
+
+            cursor = suffixOffset;
+        }
+        else
+        {
+            cursor += count.Count;
+        }
+
         properties[property] = value;
         properties[$"{property}Raw"] = value;
         properties[$"{property}Offset"] = fileOffsets[offset];
-        cursor += count.Count;
         return true;
     }
 
@@ -660,6 +686,7 @@ internal static class FormStreamParser
         "ScrollBar",
         "TabStrip",
         "MultiPage",
+        "Page",
         "ListBox",
         "CustButton",
     ];
@@ -714,4 +741,6 @@ internal static class FormStreamParser
     private static bool IsPlausiblePosition(int value) => value is >= 0 and <= 40_000;
 
     private readonly record struct SiteDepthType(byte Depth, byte SiteType);
+
+    private sealed record OleSiteRead(StructuredControlRecord? Record, int RecordEndOffset);
 }

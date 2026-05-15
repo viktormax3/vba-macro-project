@@ -17,6 +17,7 @@
 - Common binary helpers for masks, alignment, `fmString`, and string cleanup live in `MsForms/Binary`.
 - `FormSiteData` / `OleSiteConcrete` parsing now provides spec-backed site name, type cache index, position, tabIndex, flags, tag, controlTipText, and object stream size when present.
 - Parent assignment now uses `siteDepth` within a form stream and associates child `f` streams with non-streamed container controls such as frames.
+- MultiPage page sites are now recognized as `Page` controls, including nameless internal-site skipping, so page-owned controls receive page parents.
 
 ## Current Code Shape
 
@@ -32,7 +33,7 @@
 ## Next Parser Targets
 
 1. Add compact `[MS-OFORMS]` schemas per control type.
-2. Add explicit MultiPage/Page site parsing so page-owned controls get parent data without `*.scopes.json`.
+2. Parse the MultiPage `x` stream to enrich `Page` records with page properties and page IDs.
 3. Replace remaining nearby-string fallback with site data where possible.
 4. Add control parsers in this order: `CommandButton`, `Label`, `Image`, `SpinButton`, `ScrollBar`, `TabStrip`, `MorphData`.
 5. Add stream rebuilders after parser outputs are stable.

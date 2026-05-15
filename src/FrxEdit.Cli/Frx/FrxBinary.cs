@@ -310,7 +310,8 @@
         }
 
         return control.Type.Equals("Frame", StringComparison.OrdinalIgnoreCase) ||
-            control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase);
+            control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase) ||
+            control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase);
     }
 
     private static StorageEntryDump? FindPairedObjectStream(
