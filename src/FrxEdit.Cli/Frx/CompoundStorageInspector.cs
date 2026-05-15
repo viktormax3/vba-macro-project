@@ -1,4 +1,4 @@
-﻿internal static class CompoundStorageInspector
+internal static class CompoundStorageInspector
 {
     private const int HeaderSize = 512;
     private const int EndOfChain = unchecked((int)0xFFFFFFFE);
@@ -509,6 +509,14 @@ internal sealed record StorageEntryDump(
     string? ResourceKind,
     IReadOnlyList<ResourceHit> ResourceHits,
     [property: JsonIgnore] byte[] Data,
-    [property: JsonIgnore] int[] FileOffsets);
+    [property: JsonIgnore] int[] FileOffsets)
+{
+    public static StorageEntryDump CreateSegment(byte[] data, int[] fileOffsets)
+    {
+        return new StorageEntryDump(
+            -1, "Segment", "Segment", -1, (ulong)data.Length, false,
+            string.Empty, null, null, [], data, fileOffsets);
+    }
+}
 
 internal sealed record StreamRead(byte[] Data, int[] FileOffsets);

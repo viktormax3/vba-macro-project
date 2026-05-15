@@ -83,9 +83,17 @@ internal static class StructuredMsFormsParser
             site.ObjectStreamLocalOffset = cursor;
             site.ObjectStreamFileOffset = objectStream.FileOffsets[cursor];
             
-            // Here we would call ParseControlObjectStream
-            // For now we just mark the offsets.
-            
+            var controlType = string.Empty;
+            if (site.SiteType != 0)
+            {
+                ControlTypeSchema.TryGetMsFormsType(site.SiteType, out controlType);
+            }
+
+            var subStream = StorageEntryDump.CreateSegment(
+                data.AsSpan(cursor, size).ToArray(),
+                objectStream.FileOffsets.Skip(cursor).Take(size).ToArray());
+
+            site.ObjectProperties = ObjectStreamParser.Read(subStream, controlType);
             cursor += size;
         }
     }
@@ -235,10 +243,10 @@ internal static class StructuredMsFormsParser
             AlignRelative(ref extraCursor, siteStart, 4);
             if (extraCursor + 8 <= siteEnd)
             {
-                site.TopOffset = extraCursor;
-                site.Top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor, 4));
-                site.LeftOffset = extraCursor + 4;
-                site.Left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor + 4, 4));
+                site.LeftOffset = extraCursor;
+                site.Left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor, 4));
+                site.TopOffset = extraCursor + 4;
+                site.Top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor + 4, 4));
                 extraCursor += 8;
             }
         }

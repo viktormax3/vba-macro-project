@@ -47,5 +47,6 @@ internal sealed class SiteDescriptor
     public int ObjectStreamLocalOffset { get; set; } = -1;
     public long ObjectStreamFileOffset { get; set; }
 
+    public ObjectStreamProperties? ObjectProperties { get; set; }
     public Dictionary<string, object?> ExtraProperties { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
