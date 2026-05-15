@@ -1,746 +1,146 @@
+
 internal static class FormStreamParser
 {
-    private const uint AllowedSitePropMask = 0x0000_7BFF;
-
     public static IReadOnlyList<StructuredControlRecord> Read(
         StorageEntryDump stream,
-        IReadOnlySet<string>? knownControlNames)
-    {
-        var siteRecords = TryReadSiteData(stream, knownControlNames);
-        return siteRecords.Count > 0
-            ? siteRecords
-            : ReadByStructuredMarkers(stream, knownControlNames);
-    }
-
-    private static IReadOnlyList<StructuredControlRecord> TryReadSiteData(
-        StorageEntryDump stream,
-        IReadOnlySet<string>? knownControlNames)
-    {
-        var data = stream.Data;
-        if (data.Length < 12 || data[0] != 0x00 || data[1] != 0x04)
-        {
-            return [];
-        }
-
-        var cbForm = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
-        var siteDataOffset = 4 + cbForm;
-        if (siteDataOffset + 10 > data.Length)
-        {
-            return [];
-        }
-
-        return TryReadSiteDataAt(stream, knownControlNames, siteDataOffset, hasClassInfoCount: true)
-            is { Count: > 0 } withClassInfo
-                ? withClassInfo
-                : TryReadSiteDataAt(stream, knownControlNames, siteDataOffset, hasClassInfoCount: false);
-    }
-
-    private static IReadOnlyList<StructuredControlRecord> TryReadSiteDataAt(
-        StorageEntryDump stream,
         IReadOnlySet<string>? knownControlNames,
-        int siteDataOffset,
-        bool hasClassInfoCount)
+        StorageEntryDump? objectStream = null)
     {
-        var data = stream.Data;
-        var cursor = siteDataOffset;
-        var propertiesPrefix = hasClassInfoCount ? "formSiteData" : "formSiteDataNoClassCount";
-
-        if (hasClassInfoCount)
+        var sites = StructuredMsFormsParser.Parse(stream);
+        if (sites.Count > 0)
         {
-            if (cursor + 2 > data.Length)
+            if (objectStream != null)
             {
-                return [];
+                StructuredMsFormsParser.EnrichFromObjectStream(sites, objectStream);
             }
 
-            var classInfoCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-            cursor += 2;
-            for (var i = 0; i < classInfoCount; i++)
-            {
-                if (cursor + 4 > data.Length)
-                {
-                    return [];
-                }
-
-                var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-                var cbClassTable = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor + 2, 2));
-                if (version != 0 || cbClassTable < 4 || cursor + 4 + cbClassTable > data.Length)
-                {
-                    return [];
-                }
-
-                cursor += 4 + cbClassTable;
-            }
+            return sites.Select(s => MapToRecord(s, stream, objectStream)).ToList();
         }
 
-        if (cursor + 8 > data.Length)
-        {
-            return [];
-        }
-
-        var countOfSites = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-        var countOfBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor + 4, 4));
-        if (countOfSites is 0 or > 2048 || countOfBytes > data.Length - cursor)
-        {
-            return [];
-        }
-
-        cursor += 8;
-        var depthStart = cursor;
-        var depths = new List<SiteDepthType>((int)countOfSites);
-        while (depths.Count < countOfSites && cursor + 2 <= data.Length)
-        {
-            var depth = data[cursor];
-            var typeOrCount = (byte)(data[cursor + 1] & 0x7F);
-            var isCount = (data[cursor + 1] & 0x80) != 0;
-            cursor += 2;
-
-            if (isCount)
-            {
-                if (cursor >= data.Length || typeOrCount == 0)
-                {
-                    return [];
-                }
-
-                var siteType = data[cursor++];
-                for (var i = 0; i < typeOrCount && depths.Count < countOfSites; i++)
-                {
-                    depths.Add(new SiteDepthType(depth, siteType));
-                }
-            }
-            else
-            {
-                depths.Add(new SiteDepthType(depth, typeOrCount));
-            }
-        }
-
-        if (depths.Count != countOfSites)
-        {
-            return [];
-        }
-
-        var depthBytes = cursor - depthStart;
-        while (depthBytes % 4 != 0 && cursor < data.Length)
-        {
-            cursor++;
-            depthBytes++;
-        }
-
-        var records = new List<StructuredControlRecord>((int)countOfSites);
-        for (var i = 0; i < depths.Count; i++)
-        {
-            var siteOffset = cursor;
-            var site = TryReadOleSiteConcrete(stream, siteOffset, knownControlNames, depths[i], i, propertiesPrefix);
-            if (site is null)
-            {
-                return [];
-            }
-
-            if (site.Record is not null)
-            {
-                records.Add(site.Record);
-            }
-
-            cursor = site.RecordEndOffset;
-        }
-
-        return records;
+        return LegacyNameScanParser.Scan(stream, knownControlNames);
     }
 
-    private static OleSiteRead? TryReadOleSiteConcrete(
+    private static StructuredControlRecord MapToRecord(
+        SiteDescriptor site,
         StorageEntryDump stream,
-        int siteOffset,
-        IReadOnlySet<string>? knownControlNames,
-        SiteDepthType depth,
-        int siteIndex,
-        string parserName)
+        StorageEntryDump? objectStream)
     {
-        var data = stream.Data;
-        if (siteOffset + 8 > data.Length)
-        {
-            return null;
-        }
+        var marker = new ControlTypeMarker(
+            site.StreamStart,
+            (byte)(site.TabIndex ?? 0),
+            (byte)(site.ClsidCacheIndex ?? 0));
 
-        var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(siteOffset, 2));
-        var cbSite = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(siteOffset + 2, 2));
-        var siteEnd = siteOffset + 4 + cbSite;
-        if (version != 0 || cbSite < 4 || siteEnd > data.Length)
-        {
-            return null;
-        }
+        var fileOffsets = stream.FileOffsets;
+        var placement = new Placement(
+            site.Left ?? 0,
+            site.Top ?? 0,
+            null,
+            null,
+            site.LeftOffset < fileOffsets.Length ? fileOffsets[site.LeftOffset] : 0,
+            site.TopOffset < fileOffsets.Length ? fileOffsets[site.TopOffset] : 0,
+            null,
+            null);
 
-        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteOffset + 4, 4));
-        if ((propMask & ~AllowedSitePropMask) != 0)
+        var properties = new Dictionary<string, object?>(site.ExtraProperties, StringComparer.OrdinalIgnoreCase)
         {
-            return null;
-        }
-
-        var dataBlockStart = siteOffset + 8;
-        var cursor = dataBlockStart;
-        CountOfBytesWithCompressionFlag? nameCount = null;
-        CountOfBytesWithCompressionFlag? tagCount = null;
-        CountOfBytesWithCompressionFlag? controlTipCount = null;
-        CountOfBytesWithCompressionFlag? runtimeLicKeyCount = null;
-        CountOfBytesWithCompressionFlag? controlSourceCount = null;
-        CountOfBytesWithCompressionFlag? rowSourceCount = null;
-        ushort? tabIndex = null;
-        ushort? clsidCacheIndex = null;
-        int? objectStreamSize = null;
-        int? left = null;
-        int? top = null;
-        int? leftOffset = null;
-        int? topOffset = null;
-
-        var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["siteParser"] = "msOFormsOleSiteConcrete",
-            ["siteDataParser"] = parserName,
-            ["siteIndex"] = siteIndex,
-            ["siteDepth"] = depth.Depth,
-            ["siteType"] = depth.SiteType,
-            ["siteOffset"] = stream.FileOffsets[siteOffset],
-            ["siteLocalOffset"] = siteOffset,
-            ["cbSite"] = cbSite,
-            ["sitePropMask"] = $"0x{propMask:X8}",
-            ["sitePropMaskOffset"] = stream.FileOffsets[siteOffset + 4],
+            ["siteIndex"] = site.SiteIndex,
+            ["siteDepth"] = site.Depth,
+            ["siteType"] = site.SiteType,
+            ["sitePropMask"] = $"0x{site.PropMask:X8}",
+            ["siteOffset"] = site.StreamStart < fileOffsets.Length ? fileOffsets[site.StreamStart] : 0,
+            ["siteLocalOffset"] = site.StreamStart,
+            ["siteName"] = site.Name,
+            ["siteNameOffset"] = site.NameOffset < fileOffsets.Length ? fileOffsets[site.NameOffset] : 0,
         };
 
-        if (MsFormsBinary.HasBit(propMask, 0))
+        if (site.TabIndex != null)
         {
-            nameCount = ReadCount(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteName", properties);
-            properties["siteNameByteCount"] = nameCount.Value.Count;
-            properties["siteNameCompressed"] = nameCount.Value.Compressed;
+            properties["tabIndex"] = site.TabIndex;
         }
 
-        if (MsFormsBinary.HasBit(propMask, 1))
+        if (site.ClsidCacheIndex != null)
         {
-            tagCount = ReadCount(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteTag", properties);
-            properties["siteTagByteCount"] = tagCount.Value.Count;
-            properties["siteTagCompressed"] = tagCount.Value.Compressed;
+            properties["clsidCacheIndex"] = site.ClsidCacheIndex;
         }
 
-        if (MsFormsBinary.HasBit(propMask, 2))
+        if (site.ObjectStreamSize != null)
         {
-            var id = ReadSiteUInt32(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteId", properties);
-            properties["siteId"] = (int)id;
+            properties["objectStreamSizeFromSite"] = site.ObjectStreamSize;
+            properties["objectStreamLocalOffset"] = site.ObjectStreamLocalOffset;
+            properties["objectStreamFileOffset"] = site.ObjectStreamFileOffset;
         }
 
-        if (MsFormsBinary.HasBit(propMask, 3))
+        if (site.BitFlags != null)
         {
-            var help = ReadSiteUInt32(data, stream.FileOffsets, ref cursor, dataBlockStart, "helpContextID", properties);
-            properties["helpContextID"] = (int)help;
+            properties["siteBitFlags"] = $"0x{site.BitFlags:X8}";
+            AddSiteFlags(properties, site.BitFlags.Value);
         }
 
-        if (MsFormsBinary.HasBit(propMask, 4))
-        {
-            var bitFlags = ReadSiteUInt32(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteBitFlagsRaw", properties);
-            properties["siteBitFlags"] = $"0x{bitFlags:X8}";
-            AddSiteFlags(properties, bitFlags);
-        }
+        ControlTypeSchema.TryGetMsFormsType((byte)(site.ClsidCacheIndex ?? 0), out var type);
 
-        if (MsFormsBinary.HasBit(propMask, 5))
+        if (objectStream != null && site.ObjectStreamSize > 0 && site.ObjectStreamLocalOffset >= 0)
         {
-            objectStreamSize = (int)ReadSiteUInt32(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteObjectStreamSize", properties);
-            properties["objectStreamSizeFromSite"] = objectStreamSize;
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 6))
-        {
-            tabIndex = ReadSiteUInt16(data, stream.FileOffsets, ref cursor, dataBlockStart, "tabIndex", properties);
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 7))
-        {
-            clsidCacheIndex = ReadSiteUInt16(data, stream.FileOffsets, ref cursor, dataBlockStart, "clsidCacheIndex", properties);
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 9))
-        {
-            ReadSiteUInt16(data, stream.FileOffsets, ref cursor, dataBlockStart, "groupId", properties);
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 11))
-        {
-            controlTipCount = ReadCount(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteControlTipText", properties);
-            properties["controlTipTextByteCount"] = controlTipCount.Value.Count;
-            properties["controlTipTextCompressed"] = controlTipCount.Value.Compressed;
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 12))
-        {
-            runtimeLicKeyCount = ReadCount(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteRuntimeLicKey", properties);
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 13))
-        {
-            controlSourceCount = ReadCount(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteControlSource", properties);
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 14))
-        {
-            rowSourceCount = ReadCount(data, stream.FileOffsets, ref cursor, dataBlockStart, "siteRowSource", properties);
-        }
-
-        if (cursor > siteEnd)
-        {
-            return null;
-        }
-
-        if (nameCount is null)
-        {
-            properties["siteSkippedReason"] = "namelessSite";
-            return new OleSiteRead(null, siteEnd);
-        }
-
-        var extraCursor = cursor;
-        string rawName;
-        var nameOffset = siteOffset;
-        if (!TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, nameCount.Value, "name", properties, out rawName))
-        {
-            return null;
-        }
-
-        nameOffset = GetInt(properties, "nameOffset") ?? siteOffset;
-
-        if (tagCount is not null)
-        {
-            if (!TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, tagCount.Value, "tag", properties, out var tag))
+            var slice = SliceStorage(objectStream, site.ObjectStreamLocalOffset, site.ObjectStreamSize.Value);
+            var oProps = ObjectStreamParser.Read(slice, type);
+            foreach (var prop in oProps.Properties)
             {
-                return null;
+                properties[prop.Key] = prop.Value;
             }
 
-            properties["tag"] = tag;
-        }
-
-        if (MsFormsBinary.HasBit(propMask, 8))
-        {
-            extraCursor = SkipZeroBytes(data, extraCursor);
-            MsFormsBinary.Align(ref extraCursor, 2);
-            if (extraCursor + 8 > siteEnd)
+            if (oProps.Width != null || oProps.Height != null)
             {
-                return null;
-            }
-
-            left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor, 4));
-            top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(extraCursor + 4, 4));
-            leftOffset = stream.FileOffsets[extraCursor];
-            topOffset = stream.FileOffsets[extraCursor + 4];
-            properties["positionSource"] = "oleSiteConcrete";
-            properties["leftOffset"] = leftOffset;
-            properties["topOffset"] = topOffset;
-            extraCursor += 8;
-        }
-
-        if (controlTipCount is not null)
-        {
-            if (!TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, controlTipCount.Value, "controlTipText", properties, out var controlTipText))
-            {
-                return null;
-            }
-
-            properties["controlTipText"] = controlTipText;
-        }
-
-        if (runtimeLicKeyCount is not null)
-        {
-            _ = TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, runtimeLicKeyCount.Value, "runtimeLicKey", properties, out _);
-        }
-
-        if (controlSourceCount is not null)
-        {
-            _ = TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, controlSourceCount.Value, "controlSource", properties, out _);
-        }
-
-        if (rowSourceCount is not null)
-        {
-            _ = TryReadExtraString(data, stream.FileOffsets, ref extraCursor, siteEnd, rowSourceCount.Value, "rowSource", properties, out _);
-        }
-
-        if (left is null ||
-            top is null ||
-            leftOffset is null ||
-            topOffset is null ||
-            clsidCacheIndex is null ||
-            !ControlTypeSchema.TryGetMsFormsType((byte)(clsidCacheIndex.Value & 0xFF), out var type))
-        {
-            return null;
-        }
-
-        var name = NormalizeStructuredName(rawName, knownControlNames);
-        var marker = new ControlTypeMarker(
-            GetLocalOffset(stream.FileOffsets, GetInt(properties, "tabIndexOffset") ?? stream.FileOffsets[siteOffset]) ?? siteOffset,
-            (byte)(tabIndex ?? 0),
-            (byte)(clsidCacheIndex.Value & 0xFF));
-        var placement = new Placement(left.Value, top.Value, null, null, leftOffset.Value, topOffset.Value, null, null);
-        properties["parser"] = "msOFormsFormSiteData";
-
-        return new OleSiteRead(
-            new StructuredControlRecord(
-                stream,
-                marker,
-                siteOffset,
-                siteEnd,
-                GetLocalOffset(stream.FileOffsets, nameOffset) ?? siteOffset,
-                rawName.Length,
-                rawName,
-                name,
-                type,
-                placement,
-                properties,
-                ObjectStream: null),
-            siteEnd);
-    }
-
-    private static IReadOnlyList<StructuredControlRecord> ReadByStructuredMarkers(
-        StorageEntryDump stream,
-        IReadOnlySet<string>? knownControlNames)
-    {
-        var data = stream.Data;
-        var candidates = new List<StructuredControlCandidate>();
-        for (var textOffset = 4; textOffset < data.Length; textOffset++)
-        {
-            if (!MsFormsBinary.IsPrintableAscii(data[textOffset]) ||
-                textOffset > 0 && IsIdentifierPart(data[textOffset - 1]))
-            {
-                continue;
-            }
-
-            var marker = FindStructuredMarkerBefore(data, textOffset);
-            if (marker is null || !ControlTypeSchema.TryGetMsFormsType(marker.TypeCode, out var type))
-            {
-                continue;
-            }
-
-            var rawName = ReadNullTerminatedAscii(data, textOffset, maxLength: 64);
-            if (rawName is null || IsKnownNonControlIdentifier(rawName))
-            {
-                continue;
-            }
-
-            var name = NormalizeStructuredName(rawName, knownControlNames);
-            var placement = TryReadStreamPlacement(data, stream.FileOffsets, textOffset + rawName.Length);
-            if (placement is null)
-            {
-                continue;
-            }
-
-            candidates.Add(new StructuredControlCandidate(marker, textOffset, rawName, name, type, placement));
-        }
-
-        candidates = candidates
-            .OrderBy(candidate => candidate.NameOffset)
-            .ToList();
-
-        var records = new List<StructuredControlRecord>();
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var candidate = candidates[i];
-            var endOffset = i + 1 < candidates.Count ? candidates[i + 1].Marker.Offset : data.Length;
-            records.Add(new StructuredControlRecord(
-                stream,
-                candidate.Marker,
-                candidate.Marker.Offset,
-                endOffset,
-                candidate.NameOffset,
-                candidate.RawName.Length,
-                candidate.RawName,
-                candidate.Name,
-                candidate.Type,
-                candidate.Placement,
-                new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                placement = placement with
                 {
-                    ["parser"] = "structuredStorageFStream"
-                },
-                ObjectStream: null));
-        }
-
-        return records;
-    }
-
-    private static CountOfBytesWithCompressionFlag ReadCount(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        int blockStart,
-        string property,
-        Dictionary<string, object?> properties)
-    {
-        var raw = ReadSiteUInt32(data, fileOffsets, ref cursor, blockStart, $"{property}CountRaw", properties);
-        return MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(raw);
-    }
-
-    private static bool TryReadExtraString(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        int siteEnd,
-        CountOfBytesWithCompressionFlag count,
-        string property,
-        Dictionary<string, object?> properties,
-        out string value)
-    {
-        value = string.Empty;
-        cursor = SkipZeroBytes(data, cursor);
-        var offset = cursor;
-        if (offset < 0 || offset >= fileOffsets.Length || offset + count.Count > siteEnd)
-        {
-            return false;
-        }
-
-        value = MsFormsBinary.ReadFmString(data, offset, count);
-        if (property.Equals("name", StringComparison.OrdinalIgnoreCase) &&
-            value.StartsWith("Page", StringComparison.OrdinalIgnoreCase))
-        {
-            var suffixOffset = offset + count.Count;
-            while (suffixOffset < siteEnd &&
-                data[suffixOffset] != 0 &&
-                IsIdentifierPart(data[suffixOffset]))
-            {
-                value += Encoding.Latin1.GetString(data, suffixOffset, 1);
-                suffixOffset++;
+                    RawWidth = oProps.Width ?? placement.RawWidth,
+                    RawHeight = oProps.Height ?? placement.RawHeight,
+                    WidthOffset = oProps.WidthOffset ?? placement.WidthOffset,
+                    HeightOffset = oProps.HeightOffset ?? placement.HeightOffset
+                };
             }
-
-            cursor = suffixOffset;
-        }
-        else
-        {
-            cursor += count.Count;
         }
 
-        properties[property] = value;
-        properties[$"{property}Raw"] = value;
-        properties[$"{property}Offset"] = fileOffsets[offset];
-        return true;
+        return new StructuredControlRecord(
+            stream,
+            marker,
+            site.StreamStart,
+            site.StreamEnd,
+            site.NameOffset,
+            site.Name?.Length ?? 0,
+            site.Name ?? string.Empty,
+            site.Name ?? $"Control{site.SiteIndex}",
+            type ?? "Unknown",
+            placement,
+            properties,
+            objectStream);
     }
 
-    private static uint ReadSiteUInt32(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        int blockStart,
-        string property,
-        Dictionary<string, object?> properties)
+    private static StorageEntryDump SliceStorage(StorageEntryDump stream, int offset, int size)
     {
-        AlignRelative(ref cursor, blockStart, 4);
-        var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-        properties[property] = value;
-        properties[$"{property}Offset"] = fileOffsets[cursor];
-        cursor += 4;
-        return value;
-    }
-
-    private static ushort ReadSiteUInt16(
-        byte[] data,
-        int[] fileOffsets,
-        ref int cursor,
-        int blockStart,
-        string property,
-        Dictionary<string, object?> properties)
-    {
-        AlignRelative(ref cursor, blockStart, 2);
-        var value = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-        properties[property] = value;
-        properties[$"{property}Offset"] = fileOffsets[cursor];
-        cursor += 2;
-        return value;
-    }
-
-    private static void AlignRelative(ref int cursor, int blockStart, int alignment)
-    {
-        var remainder = (cursor - blockStart) % alignment;
-        if (remainder != 0)
-        {
-            cursor += alignment - remainder;
-        }
+        return new StorageEntryDump(
+            stream.Index,
+            stream.Name,
+            stream.Kind,
+            stream.StartSector,
+            (ulong)size,
+            stream.IsMiniStream,
+            "",
+            null,
+            null,
+            [],
+            stream.Data.AsSpan(offset, size).ToArray(),
+            stream.FileOffsets.AsSpan(offset, size).ToArray());
     }
 
     private static void AddSiteFlags(Dictionary<string, object?> properties, uint value)
     {
-        properties["tabStop"] = MsFormsBinary.HasBit(value, 0);
-        properties["visible"] = MsFormsBinary.HasBit(value, 1);
-        properties["default"] = MsFormsBinary.HasBit(value, 2);
-        properties["cancel"] = MsFormsBinary.HasBit(value, 3);
-        properties["streamed"] = MsFormsBinary.HasBit(value, 4);
-        properties["siteAutoSize"] = MsFormsBinary.HasBit(value, 5);
-        properties["fitToParent"] = MsFormsBinary.HasBit(value, 9);
-        properties["selectChild"] = MsFormsBinary.HasBit(value, 13);
-        properties["promoteControls"] = MsFormsBinary.HasBit(value, 18);
+        properties["tabStop"] = (value & (1u << 0)) != 0;
+        properties["visible"] = (value & (1u << 1)) != 0;
+        properties["default"] = (value & (1u << 2)) != 0;
+        properties["cancel"] = (value & (1u << 3)) != 0;
+        properties["streamed"] = (value & (1u << 4)) != 0;
+        properties["siteAutoSize"] = (value & (1u << 5)) != 0;
+        properties["fitToParent"] = (value & (1u << 9)) != 0;
+        properties["selectChild"] = (value & (1u << 13)) != 0;
+        properties["promoteControls"] = (value & (1u << 18)) != 0;
     }
-
-    private static int? GetInt(Dictionary<string, object?> properties, string property) =>
-        properties.TryGetValue(property, out var value) && value is int result ? result : null;
-
-    private static int? GetLocalOffset(int[] fileOffsets, int fileOffset)
-    {
-        for (var i = 0; i < fileOffsets.Length; i++)
-        {
-            if (fileOffsets[i] == fileOffset)
-            {
-                return i;
-            }
-        }
-
-        return null;
-    }
-
-    private static ControlTypeMarker? FindStructuredMarkerBefore(byte[] data, int textOffset)
-    {
-        var candidates = new List<(ControlTypeMarker Marker, int Gap)>();
-        var start = Math.Max(0, textOffset - 16);
-        for (var offset = textOffset - 4; offset >= start; offset--)
-        {
-            var tabIndex = data[offset];
-            var typeCode = data[offset + 2];
-            if (data[offset + 1] == 0 &&
-                data[offset + 3] == 0 &&
-                tabIndex <= 0x7F &&
-                ControlTypeSchema.TryGetMsFormsType(typeCode, out _))
-            {
-                candidates.Add((new ControlTypeMarker(offset, tabIndex, typeCode), textOffset - offset - 4));
-            }
-        }
-
-        return candidates
-            .OrderBy(candidate => candidate.Gap % 4 == 0 ? 0 : 1)
-            .ThenBy(candidate => candidate.Gap)
-            .ThenBy(candidate => candidate.Marker.TabIndex)
-            .Select(candidate => candidate.Marker)
-            .FirstOrDefault();
-    }
-
-    private static Placement? TryReadStreamPlacement(byte[] data, int[] fileOffsets, int afterNameOffset)
-    {
-        var searchStart = Math.Min(data.Length, afterNameOffset);
-        while (searchStart < data.Length && data[searchStart] == 0)
-        {
-            searchStart++;
-        }
-
-        var searchEnd = Math.Min(data.Length - 8, searchStart + 56);
-        for (var offset = searchStart; offset <= searchEnd; offset += 2)
-        {
-            var left = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4));
-            var top = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset + 4, 4));
-            if (IsPlausiblePosition(left) && IsPlausiblePosition(top))
-            {
-                return new Placement(left, top, null, null, fileOffsets[offset], fileOffsets[offset + 4], null, null);
-            }
-        }
-
-        return null;
-    }
-
-    private static string NormalizeStructuredName(string binaryName, IReadOnlySet<string>? knownControlNames)
-    {
-        if (knownControlNames is not null && knownControlNames.Contains(binaryName))
-        {
-            return binaryName;
-        }
-
-        foreach (var prefix in StandardNamePrefixes.OrderByDescending(prefix => prefix.Length))
-        {
-            if (!binaryName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var digitOffset = prefix.Length;
-            var offset = digitOffset;
-            while (offset < binaryName.Length && char.IsDigit(binaryName[offset]))
-            {
-                offset++;
-            }
-
-            if (offset == digitOffset || offset == binaryName.Length)
-            {
-                continue;
-            }
-
-            var candidate = binaryName[..offset];
-            if (knownControlNames?.Contains(candidate) == true)
-            {
-                return candidate;
-            }
-
-            var suffix = binaryName[offset..];
-            if (suffix.Length <= 3 && suffix.All(char.IsLower))
-            {
-                return candidate;
-            }
-        }
-
-        return binaryName;
-    }
-
-    private static readonly string[] StandardNamePrefixes =
-    [
-        "CommandButton",
-        "TextBox",
-        "CheckBox",
-        "Frame",
-        "Label",
-        "ComboBox",
-        "SpinButton",
-        "OptionButton",
-        "Image",
-        "ToggleButton",
-        "ScrollBar",
-        "TabStrip",
-        "MultiPage",
-        "Page",
-        "ListBox",
-        "CustButton",
-    ];
-
-    private static string? ReadNullTerminatedAscii(byte[] data, int offset, int maxLength)
-    {
-        if (offset >= data.Length || !IsIdentifierStart(data[offset]))
-        {
-            return null;
-        }
-
-        var end = offset;
-        var limit = Math.Min(data.Length, offset + maxLength);
-        while (end < limit && data[end] != 0)
-        {
-            if (!IsIdentifierPart(data[end]))
-            {
-                return end - offset < 3 ? null : Encoding.Latin1.GetString(data, offset, end - offset);
-            }
-
-            end++;
-        }
-
-        return end - offset < 3 ? null : Encoding.Latin1.GetString(data, offset, end - offset);
-    }
-
-    private static int SkipZeroBytes(byte[] data, int offset)
-    {
-        while (offset < data.Length && data[offset] == 0)
-        {
-            offset++;
-        }
-
-        return offset;
-    }
-
-    private static bool IsIdentifierStart(byte value) =>
-        value is >= (byte)'A' and <= (byte)'Z' ||
-        value is >= (byte)'a' and <= (byte)'z' ||
-        value == (byte)'_';
-
-    private static bool IsIdentifierPart(byte value) =>
-        IsIdentifierStart(value) ||
-        value is >= (byte)'0' and <= (byte)'9';
-
-    private static bool IsKnownNonControlIdentifier(string name) =>
-        name.Equals("Tahoma", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Forms", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Microsoft", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Object", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsPlausiblePosition(int value) => value is >= 0 and <= 40_000;
-
-    private readonly record struct SiteDepthType(byte Depth, byte SiteType);
-
-    private sealed record OleSiteRead(StructuredControlRecord? Record, int RecordEndOffset);
 }

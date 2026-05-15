@@ -1,4 +1,4 @@
-﻿internal sealed class FrxBinary
+internal sealed class FrxBinary
 {
     private const double FrxUnitsPerPoint = 35.25;
     private const int RecordBlockGapThreshold = 512;
@@ -180,13 +180,9 @@
                 streamOwner = pendingContainerOwners.Dequeue();
             }
 
-            var streamRecords = FormStreamParser.Read(stream, knownControlNames);
-            var streamControls = BuildControlInfos(streamRecords, streamOwner, controlScopes);
             var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
-            if (streamControls.Count == 1 && pairedOStream is not null)
-            {
-                streamControls = [EnrichSingleControlFromOStream(streamControls[0], pairedOStream)];
-            }
+            var streamRecords = FormStreamParser.Read(stream, knownControlNames, pairedOStream);
+            var streamControls = BuildControlInfos(streamRecords, streamOwner, controlScopes);
 
             foreach (var control in streamControls)
             {
@@ -241,9 +237,10 @@
         string? siteParent,
         IReadOnlyDictionary<string, string>? controlScopes)
     {
-        var recordStartOffset = record.Stream.FileOffsets[record.RecordStartOffset];
-        var markerOffset = record.Stream.FileOffsets[record.Marker.Offset];
-        var nameOffset = record.Stream.FileOffsets[record.NameOffset];
+        var fileOffsets = record.Stream.FileOffsets;
+        var recordStartOffset = record.RecordStartOffset < fileOffsets.Length ? fileOffsets[record.RecordStartOffset] : 0;
+        var markerOffset = record.Marker.Offset < fileOffsets.Length ? fileOffsets[record.Marker.Offset] : 0;
+        var nameOffset = record.NameOffset < fileOffsets.Length ? fileOffsets[record.NameOffset] : 0;
         var properties = new Dictionary<string, object?>(record.SiteProperties, StringComparer.OrdinalIgnoreCase)
         {
             ["streamName"] = record.Stream.Name,
