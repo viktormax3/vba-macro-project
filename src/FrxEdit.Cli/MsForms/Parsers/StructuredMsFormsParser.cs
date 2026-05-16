@@ -56,6 +56,10 @@ internal static class StructuredMsFormsParser
             site.ExtraProperties["siteDataCountOfSites"] = best.CountOfSites;
             site.ExtraProperties["siteDataCountOfBytes"] = best.CountOfBytes;
             site.ExtraProperties["siteDataEndOffset"] = best.EndOffset;
+            if (best.ClassTable.Count > 0)
+            {
+                site.ExtraProperties["classTableCount"] = best.ClassTable.Count;
+            }
             if (stream.FileOffsets.Length == stream.Data.Length)
             {
                 site.ExtraProperties["siteDataFileOffset"] = stream.FileOffsets[best.Offset];
@@ -125,6 +129,7 @@ internal static class StructuredMsFormsParser
         var data = stream.Data;
         var cursor = offset;
         ushort classInfoCount = 0;
+        IReadOnlyList<ClassTableEntry> classTable = Array.Empty<ClassTableEntry>();
 
         if (hasClassInfoCount)
         {
@@ -142,10 +147,12 @@ internal static class StructuredMsFormsParser
 
             if (classInfoCount > 0)
             {
-                // ClassTable is uncommon for the MSForms built-in controls covered by this tool.
-                // Refuse rather than guessing: this keeps the parser deterministic and lets the
-                // legacy fallback handle unsupported custom controls until SiteClassInfo is complete.
-                return false;
+                if (!TryReadClassTable(data, stream.FileOffsets, ref cursor, classInfoCount, out var parsedClassTable))
+                {
+                    return false;
+                }
+
+                classTable = parsedClassTable;
             }
         }
 
@@ -178,7 +185,7 @@ internal static class StructuredMsFormsParser
         var sites = new List<SiteDescriptor>((int)countOfSites);
         for (var i = 0; i < (int)countOfSites; i++)
         {
-            if (!TryReadSite(stream, ref cursor, depths[i], i, out var site))
+            if (!TryReadSite(stream, ref cursor, depths[i], i, classTable, out var site))
             {
                 return false;
             }
@@ -192,7 +199,7 @@ internal static class StructuredMsFormsParser
         }
 
         var validNameCount = sites.Count(s => !string.IsNullOrWhiteSpace(s.Name));
-        var knownTypeCount = sites.Count(s => KnownMsFormsTypeCodes.Contains(s.ClsidCacheIndex ?? 0));
+        var knownTypeCount = sites.Count(s => IsKnownOrClassTableType(s.ClsidCacheIndex, classTable));
         var plausiblePositionCount = sites.Count(s => s.Left is >= -200_000 and <= 200_000 && s.Top is >= -200_000 and <= 200_000);
         var score = validNameCount * 10 + knownTypeCount * 10 + plausiblePositionCount * 5 + sites.Count;
         if (validNameCount != sites.Count || knownTypeCount != sites.Count)
@@ -209,6 +216,7 @@ internal static class StructuredMsFormsParser
             depthStart,
             expectedEnd,
             score,
+            classTable,
             sites);
         return true;
     }
@@ -265,6 +273,7 @@ internal static class StructuredMsFormsParser
         ref int cursor,
         SiteDepthType depth,
         int index,
+        IReadOnlyList<ClassTableEntry> classTable,
         out SiteDescriptor site)
     {
         site = default!;
@@ -525,9 +534,26 @@ internal static class StructuredMsFormsParser
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(site.Name) || !KnownMsFormsTypeCodes.Contains(site.ClsidCacheIndex ?? 0))
+        if (string.IsNullOrWhiteSpace(site.Name) || !IsKnownOrClassTableType(site.ClsidCacheIndex, classTable))
         {
             return false;
+        }
+
+        if (site.ClsidCacheIndex is >= 0x8000)
+        {
+            var classTableIndex = site.ClsidCacheIndex.Value - 0x8000;
+            site.ExtraProperties["classTableIndex"] = classTableIndex;
+            if (classTableIndex >= 0 && classTableIndex < classTable.Count)
+            {
+                var classInfo = classTable[classTableIndex];
+                site.ExtraProperties["classInfoPropMask"] = $"0x{classInfo.PropMask:X8}";
+                site.ExtraProperties["classInfoOffset"] = classInfo.FileOffset;
+                site.ExtraProperties["classInfoLocalOffset"] = classInfo.LocalOffset;
+                site.ExtraProperties["classInfoCb"] = classInfo.CbClassTable;
+                if (classInfo.ClsId is not null) site.ExtraProperties["classInfoClsId"] = classInfo.ClsId;
+                if (classInfo.DispEvent is not null) site.ExtraProperties["classInfoDispEvent"] = classInfo.DispEvent;
+                if (classInfo.DefaultProg is not null) site.ExtraProperties["classInfoDefaultProg"] = classInfo.DefaultProg;
+            }
         }
 
         if (site.Left is { } left && site.Top is { } top &&
@@ -540,6 +566,141 @@ internal static class StructuredMsFormsParser
         cursor = siteEnd;
         return true;
     }
+
+
+    private static bool IsKnownOrClassTableType(ushort? clsidCacheIndex, IReadOnlyList<ClassTableEntry> classTable)
+    {
+        if (clsidCacheIndex is not { } value)
+        {
+            return false;
+        }
+
+        if (KnownMsFormsTypeCodes.Contains(value))
+        {
+            return true;
+        }
+
+        return value >= 0x8000 && value - 0x8000 < classTable.Count;
+    }
+
+    private static bool TryReadClassTable(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        ushort classInfoCount,
+        out IReadOnlyList<ClassTableEntry> classTable)
+    {
+        var result = new List<ClassTableEntry>(classInfoCount);
+        for (var i = 0; i < classInfoCount; i++)
+        {
+            if (!TryReadSiteClassInfo(data, fileOffsets, ref cursor, i, out var entry))
+            {
+                classTable = Array.Empty<ClassTableEntry>();
+                return false;
+            }
+
+            result.Add(entry);
+        }
+
+        classTable = result;
+        return true;
+    }
+
+    private static bool TryReadSiteClassInfo(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        int index,
+        out ClassTableEntry entry)
+    {
+        entry = default!;
+        var start = cursor;
+        if (start + 8 > data.Length)
+        {
+            return false;
+        }
+
+        var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(start, 2));
+        var cbClassTable = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(start + 2, 2));
+        var end = start + 4 + cbClassTable;
+        if (version != 0 || cbClassTable < 4 || end > data.Length)
+        {
+            return false;
+        }
+
+        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(start + 4, 4));
+        var dataCursor = start + 8;
+
+        // ClassInfoDataBlock. The fields smaller than 4 bytes are packed in documentation order;
+        // padding is only needed before DispidRowset and at the end of the data block.
+        if (MsFormsBinary.HasBit(propMask, 4))
+        {
+            dataCursor += 4; // ClassTableFlags + VarFlags, 2 bytes each.
+        }
+        if (MsFormsBinary.HasBit(propMask, 5)) dataCursor += 4; // CountOfMethods
+        if (MsFormsBinary.HasBit(propMask, 6)) dataCursor += 4; // DispidBind
+        if (MsFormsBinary.HasBit(propMask, 7)) dataCursor += 2; // GetBindIndex
+        if (MsFormsBinary.HasBit(propMask, 8)) dataCursor += 2; // PutBindIndex
+        if (MsFormsBinary.HasBit(propMask, 9)) dataCursor += 2; // BindType
+        if (MsFormsBinary.HasBit(propMask, 10)) dataCursor += 2; // GetValueIndex
+        if (MsFormsBinary.HasBit(propMask, 11)) dataCursor += 2; // PutValueIndex
+        if (MsFormsBinary.HasBit(propMask, 12)) dataCursor += 2; // ValueType
+        if (MsFormsBinary.HasBit(propMask, 13))
+        {
+            dataCursor = AlignAbsolute(dataCursor, 4);
+            dataCursor += 4; // DispidRowset
+        }
+        if (MsFormsBinary.HasBit(propMask, 14)) dataCursor += 2; // SetRowset
+        dataCursor = AlignAbsolute(dataCursor, 4);
+
+        if (dataCursor > end)
+        {
+            return false;
+        }
+
+        string? clsId = null;
+        string? dispEvent = null;
+        string? defaultProg = null;
+        var extraCursor = dataCursor;
+        if (MsFormsBinary.HasBit(propMask, 0))
+        {
+            if (extraCursor + 16 > end) return false;
+            clsId = ReadGuidString(data, extraCursor);
+            extraCursor += 16;
+        }
+        if (MsFormsBinary.HasBit(propMask, 1))
+        {
+            if (extraCursor + 16 > end) return false;
+            dispEvent = ReadGuidString(data, extraCursor);
+            extraCursor += 16;
+        }
+        if (MsFormsBinary.HasBit(propMask, 3))
+        {
+            if (extraCursor + 16 > end) return false;
+            defaultProg = ReadGuidString(data, extraCursor);
+            extraCursor += 16;
+        }
+
+        entry = new ClassTableEntry(
+            index,
+            start,
+            MsFormsBinary.OffsetAt(fileOffsets, start),
+            cbClassTable,
+            propMask,
+            clsId,
+            dispEvent,
+            defaultProg);
+        cursor = end;
+        return true;
+    }
+
+    private static int AlignAbsolute(int cursor, int alignment)
+    {
+        var remainder = cursor % alignment;
+        return remainder == 0 ? cursor : cursor + alignment - remainder;
+    }
+
+    private static string ReadGuidString(byte[] data, int offset) => new Guid(data.AsSpan(offset, 16)).ToString("B").ToUpperInvariant();
 
     private static CountOfBytesWithCompressionFlag ReadCount(
         byte[] data,
@@ -604,15 +765,37 @@ internal static class StructuredMsFormsParser
         return MsFormsBinary.TrimTrailingBinaryChars(text);
     }
 
-    private static string ResolveControlType(ushort? clsidCacheIndex) =>
-        clsidCacheIndex is { } value && ControlTypeSchema.TryGetMsFormsType((byte)(value & 0xFF), out var type)
+    private static string ResolveControlType(ushort? clsidCacheIndex)
+    {
+        if (clsidCacheIndex is not { } value)
+        {
+            return "Unknown";
+        }
+
+        if (value >= 0x8000)
+        {
+            return "ActiveX";
+        }
+
+        return ControlTypeSchema.TryGetMsFormsType((byte)(value & 0xFF), out var type)
             ? type
             : "Unknown";
+    }
 
     private static bool IsParentStorageControl(string? controlType) =>
         controlType is "Frame" or "MultiPage" or "Page";
 
     private readonly record struct SiteDepthType(byte Depth, byte SiteType);
+
+    private sealed record ClassTableEntry(
+        int Index,
+        int LocalOffset,
+        int FileOffset,
+        int CbClassTable,
+        uint PropMask,
+        string? ClsId,
+        string? DispEvent,
+        string? DefaultProg);
 
     private sealed record FormSiteDataCandidate(
         int Offset,
@@ -623,6 +806,7 @@ internal static class StructuredMsFormsParser
         int DepthStartOffset,
         int EndOffset,
         int Score,
+        IReadOnlyList<ClassTableEntry> ClassTable,
         IReadOnlyList<SiteDescriptor> Sites);
 
     private sealed class InternalSiteDataBlock

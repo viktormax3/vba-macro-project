@@ -1,4 +1,4 @@
-﻿
+
 internal static class FormStreamParser
 {
     public static IReadOnlyList<StructuredControlRecord> Read(
@@ -23,6 +23,11 @@ internal static class FormStreamParser
             return sites.Select(s => MapToRecord(s, stream, objectStream)).ToList();
         }
 
+        if (IsDocumentedEmptyParentStorage(stream, objectStream))
+        {
+            return [];
+        }
+
         if (parserMode == ParserMode.Strict)
         {
             throw new CliException($"Strict parser mode could not parse FormSiteData in stream '{stream.Path ?? stream.Name}'.");
@@ -31,6 +36,18 @@ internal static class FormStreamParser
         return LegacyNameScanParser.Scan(stream, knownControlNames);
     }
 
+    private static bool IsDocumentedEmptyParentStorage(StorageEntryDump stream, StorageEntryDump? objectStream)
+    {
+        if (!FormControlParser.TryRead(stream, out _))
+        {
+            return false;
+        }
+
+        // MS-OFORMS parent controls are persisted as storages with an "f" Form stream.
+        // A parent with no embedded non-parent controls can legitimately have an empty "o" stream
+        // and no SiteData records to enumerate. This occurs with empty Frames/Pages.
+        return objectStream is null || objectStream.Data.Length == 0;
+    }
 
     private static StructuredControlRecord MapToRecord(
         SiteDescriptor site,

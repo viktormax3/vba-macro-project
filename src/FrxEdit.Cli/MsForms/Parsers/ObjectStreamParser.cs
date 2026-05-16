@@ -683,7 +683,122 @@ internal static class ObjectStreamParser
             }
         }
 
+        if ((controlType.Equals("ComboBox", StringComparison.OrdinalIgnoreCase) ||
+             controlType.Equals("ListBox", StringComparison.OrdinalIgnoreCase)) &&
+            properties.TryGetValue("cColumnInfo", out var columnInfoValue) &&
+            TryConvertToInt(columnInfoValue, out var columnInfoCount) &&
+            columnInfoCount > 0)
+        {
+            var columnInfos = new List<Dictionary<string, object?>>(columnInfoCount);
+            var columnCursor = cursor;
+            for (var i = 0; i < columnInfoCount; i++)
+            {
+                if (!TryReadMorphDataColumnInfo(data, stream.FileOffsets, ref columnCursor, i, out var columnInfo))
+                {
+                    properties["columnInfoParseWarning"] = $"Could not read MorphDataColumnInfo {i} at local offset {columnCursor}.";
+                    break;
+                }
+
+                columnInfos.Add(columnInfo);
+            }
+
+            if (columnInfos.Count > 0)
+            {
+                properties["columnInfo"] = columnInfos;
+                properties["columnInfoCountParsed"] = columnInfos.Count;
+                properties["columnInfoLocalOffset"] = cursor;
+                properties["columnInfoOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+                properties["columnInfoEndLocalOffset"] = columnCursor;
+                properties["columnInfoEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, Math.Min(columnCursor, stream.FileOffsets.Length - 1));
+                cursor = columnCursor;
+            }
+        }
+
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
+    }
+
+    private static bool TryReadMorphDataColumnInfo(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        int index,
+        out Dictionary<string, object?> columnInfo)
+    {
+        columnInfo = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var start = cursor;
+        if (start + 8 > data.Length)
+        {
+            return false;
+        }
+
+        var minorVersion = data[cursor++];
+        var majorVersion = data[cursor++];
+        var cbColumnInfo = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
+        cursor += 2;
+        var end = start + 4 + cbColumnInfo;
+        if (minorVersion != 0 || majorVersion != 2 || cbColumnInfo < 4 || end > data.Length)
+        {
+            cursor = start;
+            return false;
+        }
+
+        var propMaskOffset = cursor;
+        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+        cursor += 4;
+        columnInfo["index"] = index;
+        columnInfo["minorVersion"] = minorVersion;
+        columnInfo["majorVersion"] = majorVersion;
+        columnInfo["cbColumnInfo"] = cbColumnInfo;
+        columnInfo["localOffset"] = start;
+        columnInfo["offset"] = MsFormsBinary.OffsetAt(fileOffsets, start);
+        columnInfo["propMask"] = $"0x{propMask:X8}";
+        columnInfo["propMaskLocalOffset"] = propMaskOffset;
+        columnInfo["propMaskOffset"] = MsFormsBinary.OffsetAt(fileOffsets, propMaskOffset);
+
+        if (MsFormsBinary.HasBit(propMask, 0))
+        {
+            if (cursor + 4 > end)
+            {
+                cursor = start;
+                return false;
+            }
+
+            var widthOffset = cursor;
+            var width = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+            cursor += 4;
+            columnInfo["width"] = width;
+            columnInfo["widthLocalOffset"] = widthOffset;
+            columnInfo["widthOffset"] = MsFormsBinary.OffsetAt(fileOffsets, widthOffset);
+            columnInfo["widthPt"] = Math.Round(width / (2540.0 / 72.0), 2);
+        }
+
+        cursor = end;
+        return true;
+    }
+
+    private static bool TryConvertToInt(object? value, out int result)
+    {
+        switch (value)
+        {
+            case byte b:
+                result = b;
+                return true;
+            case ushort us:
+                result = us;
+                return true;
+            case short s:
+                result = s;
+                return true;
+            case int i:
+                result = i;
+                return true;
+            case uint ui when ui <= int.MaxValue:
+                result = (int)ui;
+                return true;
+            default:
+                result = 0;
+                return false;
+        }
     }
 
     private static int Align4(int value) => (value + 3) & ~3;

@@ -39,7 +39,7 @@ if "%OUT%"=="" (
 for %%I in ("%OUT%") do set "RAW_OUT=%%~dpnI.raw.json"
 
 pushd "%SCRIPT_DIR%" >nul
-dotnet run --project "src\FrxEdit.Cli\FrxEdit.Cli.csproj" -- inspect "%FORM%" --out "%OUT%" --raw-out "%RAW_OUT%"
+dotnet run --project "src\FrxEdit.Cli\FrxEdit.Cli.csproj" -- inspect "%FORM%" --mode tolerant --out "%OUT%" --raw-out "%RAW_OUT%"
 set "EXIT_CODE=%ERRORLEVEL%"
 popd >nul
 
