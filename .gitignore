@@ -26,3 +26,5 @@ stream_*.json
 userform_patched.frx
 mass_rename_*.patch.json
 property_test.patch.json
+UserForm1.inspect.old.json
+UserForm1.inspect.raw.old.json
