@@ -58,6 +58,60 @@ internal static class MsFormsBinary
         return value;
     }
 
+
+    public static int Align4(int value) => (value + 3) & ~3;
+
+    public static Dictionary<string, object?> CreateStringSpan(
+        CountOfBytesWithCompressionFlag count,
+        int countLocalOffset,
+        int dataLocalOffset,
+        int[] fileOffsets)
+    {
+        var span = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["dataLocalOffset"] = dataLocalOffset,
+            ["dataOffset"] = OffsetAt(fileOffsets, dataLocalOffset),
+            ["byteCount"] = count.Count,
+            ["paddedByteCount"] = Align4(count.Count),
+            ["compressed"] = count.Compressed,
+            ["inPlaceByteCapacity"] = count.Count
+        };
+
+        if (countLocalOffset >= 0)
+        {
+            span["countLocalOffset"] = countLocalOffset;
+            span["countOffset"] = OffsetAt(fileOffsets, countLocalOffset);
+        }
+
+        return span;
+    }
+
+    public static void AddStringSpan(
+        Dictionary<string, object?> properties,
+        string propertyName,
+        CountOfBytesWithCompressionFlag count,
+        int countLocalOffset,
+        int dataLocalOffset,
+        int[] fileOffsets)
+    {
+        properties[$"{propertyName}ByteCount"] = count.Count;
+        properties[$"{propertyName}Compressed"] = count.Compressed;
+        properties[$"{propertyName}PaddedByteCount"] = Align4(count.Count);
+        properties[$"{propertyName}LocalOffset"] = dataLocalOffset;
+        properties[$"{propertyName}Offset"] = OffsetAt(fileOffsets, dataLocalOffset);
+        if (countLocalOffset >= 0)
+        {
+            properties[$"{propertyName}CountLocalOffset"] = countLocalOffset;
+            properties[$"{propertyName}CountOffset"] = OffsetAt(fileOffsets, countLocalOffset);
+        }
+        properties[$"{propertyName}Span"] = CreateStringSpan(count, countLocalOffset, dataLocalOffset, fileOffsets);
+    }
+
+    public static int OffsetAt(int[] fileOffsets, int streamOffset)
+    {
+        return streamOffset >= 0 && streamOffset < fileOffsets.Length ? fileOffsets[streamOffset] : 0;
+    }
+
     public static CountOfBytesWithCompressionFlag DecodeCountOfBytesWithCompressionFlag(uint value) =>
         new((int)(value & 0x7FFF_FFFF), (value & 0x8000_0000) != 0);
 

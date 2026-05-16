@@ -153,8 +153,8 @@ internal sealed record HumanLayoutDocument(
 
         return name.ToLowerInvariant() switch
         {
-            "caption" or "tag" or "controltiptext" or "fontname" =>
-                properties.ContainsKey($"{name}Offset"),
+            "caption" or "tag" or "controltiptext" or "fontname" or "value" or "groupname" =>
+                properties.ContainsKey($"{name}Span") || properties.ContainsKey($"{name}Offset"),
             "backcolor" or "forecolor" or "fontsize" or "bordercolor" =>
                 properties.ContainsKey($"{name}Offset"),
             "tabindex" =>

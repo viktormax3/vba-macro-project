@@ -57,12 +57,17 @@ internal static class FormControlParser
             Align(ref cursor, 4);
             if (Has(propMask, 18)) ReadColor(data, fileOffsets, ref cursor, blockEnd, "formBorderColor", result);
             Align(ref cursor, 4);
+            int formCaptionCountLocalOffset = -1;
             if (Has(propMask, 19))
             {
+                cursor = AlignTo(cursor, 4);
+                formCaptionCountLocalOffset = cursor;
                 var raw = ReadUInt32(data, fileOffsets, ref cursor, blockEnd, "formCaptionCountRaw", result);
                 captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(raw);
                 result["formCaptionByteCount"] = captionCount.Value.Count;
                 result["formCaptionCompressed"] = captionCount.Value.Compressed;
+                result["formCaptionPaddedByteCount"] = MsFormsBinary.Align4(captionCount.Value.Count);
+                result["formCaptionCountLocalOffset"] = formCaptionCountLocalOffset;
             }
             Align(ref cursor, 2);
             if (Has(propMask, 20)) ReadUInt16(data, fileOffsets, ref cursor, blockEnd, "formFontMarker", result);
@@ -147,6 +152,10 @@ internal static class FormControlParser
                 EnsureAvailable(cursor, captionCount.Value.Count, blockEnd);
                 result["formCaption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount.Value);
                 result["formCaptionOffset"] = OffsetAt(fileOffsets, cursor);
+                var localCountOffset = result.TryGetValue("formCaptionCountLocalOffset", out var countLocal) && countLocal is int countLocalOffset
+                    ? countLocalOffset
+                    : -1;
+                MsFormsBinary.AddStringSpan(result, "formCaption", captionCount.Value, localCountOffset, cursor, fileOffsets);
                 cursor += Align4(captionCount.Value.Count);
             }
         }

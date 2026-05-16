@@ -851,6 +851,12 @@ internal sealed class FrxBinary
 
         var text = value.GetString() ?? string.Empty;
         var properties = control.Properties ?? throw new CliException($"Control '{control.Name}' has no property metadata.");
+        if (TryGetStringSpan(properties, property, out var span))
+        {
+            WriteStringSpan(control.Name, property, text, span);
+            return;
+        }
+
         var offset = GetRequiredIntProperty(properties, $"{property}Offset", control.Name);
         var current = GetStringProperty(properties, property) ?? string.Empty;
         var raw = GetStringProperty(properties, $"{property}Raw") ?? current;
@@ -902,6 +908,82 @@ internal sealed class FrxBinary
 
         Bytes[markerOffset] = (byte)tabIndex;
     }
+
+
+    private void WriteStringSpan(string controlName, string property, string text, StringSpanInfo span)
+    {
+        byte[] bytes;
+        if (span.Compressed)
+        {
+            if (text.Any(ch => ch > 0xFF))
+            {
+                throw new CliException($"Property '{property}' for '{controlName}' is stored as a compressed ANSI fmString and cannot contain characters outside Latin-1 in the current in-place editor.");
+            }
+
+            bytes = Encoding.Latin1.GetBytes(text);
+        }
+        else
+        {
+            bytes = Encoding.Unicode.GetBytes(text);
+        }
+
+        if (bytes.Length > span.InPlaceByteCapacity)
+        {
+            throw new CliException($"Property '{property}' for '{controlName}' is longer than the current in-place capacity ({span.InPlaceByteCapacity} bytes). Rebuild editing will be needed for longer strings.");
+        }
+
+        bytes.CopyTo(Bytes.AsSpan(span.DataOffset, bytes.Length));
+        Bytes.AsSpan(span.DataOffset + bytes.Length, span.InPlaceByteCapacity - bytes.Length).Clear();
+    }
+
+    private static bool TryGetStringSpan(Dictionary<string, object?> properties, string property, out StringSpanInfo span)
+    {
+        span = default;
+        if (!properties.TryGetValue($"{property}Span", out var value) || value is not Dictionary<string, object?> dict)
+        {
+            return false;
+        }
+
+        if (!TryReadInt(dict, "dataOffset", out var dataOffset) ||
+            !TryReadInt(dict, "byteCount", out var byteCount) ||
+            !TryReadInt(dict, "inPlaceByteCapacity", out var capacity))
+        {
+            return false;
+        }
+
+        var compressed = dict.TryGetValue("compressed", out var compressedValue) && compressedValue is bool compressedBool && compressedBool;
+        span = new StringSpanInfo(dataOffset, byteCount, capacity, compressed);
+        return true;
+    }
+
+    private static bool TryReadInt(Dictionary<string, object?> dict, string key, out int value)
+    {
+        value = 0;
+        if (!dict.TryGetValue(key, out var raw) || raw is null)
+        {
+            return false;
+        }
+
+        switch (raw)
+        {
+            case int i:
+                value = i;
+                return true;
+            case long l when l >= int.MinValue && l <= int.MaxValue:
+                value = (int)l;
+                return true;
+            case uint u when u <= int.MaxValue:
+                value = (int)u;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var jsonInt):
+                value = jsonInt;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private readonly record struct StringSpanInfo(int DataOffset, int ByteCount, int InPlaceByteCapacity, bool Compressed);
 
     private static int GetRequiredIntProperty(Dictionary<string, object?> properties, string property, string controlName)
     {

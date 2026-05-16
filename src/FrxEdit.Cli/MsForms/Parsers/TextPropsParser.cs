@@ -48,9 +48,12 @@ internal static class TextPropsParser
             }
 
             var raw = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+            var countOffset = cursor;
             fontNameCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(raw);
             properties["fontNameByteCount"] = fontNameCount.Value.Count;
             properties["fontNameCompressed"] = fontNameCount.Value.Compressed;
+            properties["fontNamePaddedByteCount"] = MsFormsBinary.Align4(fontNameCount.Value.Count);
+            properties["fontNameCountLocalOffset"] = countOffset;
             properties["fontNameCountOffset"] = fileOffsets[cursor];
             cursor += 4;
         }
@@ -107,7 +110,10 @@ internal static class TextPropsParser
             }
 
             properties["fontName"] = MsFormsBinary.ReadFmString(data, cursor, fontNameCount.Value);
-            properties["fontNameOffset"] = fileOffsets[cursor];
+            var countOffset = properties.TryGetValue("fontNameCountLocalOffset", out var local) && local is int localOffset
+                ? localOffset
+                : -1;
+            MsFormsBinary.AddStringSpan(properties, "fontName", fontNameCount.Value, countOffset, cursor, fileOffsets);
             cursor += fontNameCount.Value.Count;
             MsFormsBinary.Align(ref cursor, 4);
         }

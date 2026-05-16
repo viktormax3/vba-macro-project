@@ -319,7 +319,10 @@ internal static class StructuredMsFormsParser
         {
             if (mask.HasName)
             {
-                site.ExtraProperties["siteNameCountRawOffset"] = stream.FileOffsets.Length > dataCursor ? stream.FileOffsets[dataCursor] : 0;
+                var nameCountLocalOffset = AlignOffset(dataCursor, siteStart, 4);
+                site.ExtraProperties["siteNameCountRawLocalOffset"] = nameCountLocalOffset;
+                site.ExtraProperties["siteNameCountRawOffset"] = stream.FileOffsets.Length > nameCountLocalOffset ? stream.FileOffsets[nameCountLocalOffset] : 0;
+                dataBlock.NameCountLocalOffset = nameCountLocalOffset;
                 dataBlock.NameCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["siteNameCountRaw"] = raw;
                 site.ExtraProperties["siteNameByteCount"] = dataBlock.NameCount.Count;
@@ -328,6 +331,7 @@ internal static class StructuredMsFormsParser
 
             if (mask.HasTag)
             {
+                dataBlock.TagCountLocalOffset = AlignOffset(dataCursor, siteStart, 4);
                 dataBlock.TagCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["siteTagCountRaw"] = raw;
                 site.ExtraProperties["tagByteCount"] = dataBlock.TagCount.Count;
@@ -389,6 +393,7 @@ internal static class StructuredMsFormsParser
 
             if (mask.HasControlTipText)
             {
+                dataBlock.ControlTipCountLocalOffset = AlignOffset(dataCursor, siteStart, 4);
                 dataBlock.ControlTipCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["controlTipTextCountRaw"] = raw;
                 site.ExtraProperties["controlTipTextByteCount"] = dataBlock.ControlTipCount.Count;
@@ -397,6 +402,7 @@ internal static class StructuredMsFormsParser
 
             if (mask.HasRuntimeLicKey)
             {
+                dataBlock.RuntimeLicKeyCountLocalOffset = AlignOffset(dataCursor, siteStart, 4);
                 dataBlock.RuntimeLicKeyCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["runtimeLicKeyCountRaw"] = raw;
                 site.ExtraProperties["runtimeLicKeyByteCount"] = dataBlock.RuntimeLicKeyCount.Count;
@@ -405,6 +411,7 @@ internal static class StructuredMsFormsParser
 
             if (mask.HasControlSource)
             {
+                dataBlock.ControlSourceCountLocalOffset = AlignOffset(dataCursor, siteStart, 4);
                 dataBlock.ControlSourceCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["controlSourceCountRaw"] = raw;
                 site.ExtraProperties["controlSourceByteCount"] = dataBlock.ControlSourceCount.Count;
@@ -413,13 +420,14 @@ internal static class StructuredMsFormsParser
 
             if (mask.HasRowSource)
             {
+                dataBlock.RowSourceCountLocalOffset = AlignOffset(dataCursor, siteStart, 4);
                 dataBlock.RowSourceCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["rowSourceCountRaw"] = raw;
                 site.ExtraProperties["rowSourceByteCount"] = dataBlock.RowSourceCount.Count;
                 site.ExtraProperties["rowSourceCompressed"] = dataBlock.RowSourceCount.Compressed;
             }
         }
-        catch
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException or OverflowException)
         {
             return false;
         }
@@ -440,6 +448,7 @@ internal static class StructuredMsFormsParser
                 site.ExtraProperties["name"] = site.Name;
                 site.ExtraProperties["nameRaw"] = site.Name;
                 site.ExtraProperties["nameOffset"] = stream.FileOffsets.Length > site.NameOffset ? stream.FileOffsets[site.NameOffset] : 0;
+                MsFormsBinary.AddStringSpan(site.ExtraProperties, "name", dataBlock.NameCount, dataBlock.NameCountLocalOffset, site.NameOffset, stream.FileOffsets);
                 extraCursor += Align4(dataBlock.NameCount.Count);
             }
 
@@ -449,6 +458,7 @@ internal static class StructuredMsFormsParser
                 site.Tag = ReadFmString(data, extraCursor, dataBlock.TagCount, siteEnd);
                 site.ExtraProperties["tag"] = site.Tag;
                 site.ExtraProperties["tagOffset"] = stream.FileOffsets.Length > site.TagOffset ? stream.FileOffsets[site.TagOffset] : 0;
+                MsFormsBinary.AddStringSpan(site.ExtraProperties, "tag", dataBlock.TagCount, dataBlock.TagCountLocalOffset, site.TagOffset, stream.FileOffsets);
                 extraCursor += Align4(dataBlock.TagCount.Count);
             }
 
@@ -476,6 +486,7 @@ internal static class StructuredMsFormsParser
                 var offset = extraCursor;
                 site.ExtraProperties["controlTipText"] = ReadFmString(data, offset, dataBlock.ControlTipCount, siteEnd);
                 site.ExtraProperties["controlTipTextOffset"] = stream.FileOffsets.Length > offset ? stream.FileOffsets[offset] : 0;
+                MsFormsBinary.AddStringSpan(site.ExtraProperties, "controlTipText", dataBlock.ControlTipCount, dataBlock.ControlTipCountLocalOffset, offset, stream.FileOffsets);
                 extraCursor += Align4(dataBlock.ControlTipCount.Count);
             }
 
@@ -485,6 +496,7 @@ internal static class StructuredMsFormsParser
                 var offset = extraCursor;
                 site.ExtraProperties["runtimeLicKey"] = ReadFmString(data, offset, dataBlock.RuntimeLicKeyCount, siteEnd);
                 site.ExtraProperties["runtimeLicKeyOffset"] = stream.FileOffsets.Length > offset ? stream.FileOffsets[offset] : 0;
+                MsFormsBinary.AddStringSpan(site.ExtraProperties, "runtimeLicKey", dataBlock.RuntimeLicKeyCount, dataBlock.RuntimeLicKeyCountLocalOffset, offset, stream.FileOffsets);
                 extraCursor += Align4(dataBlock.RuntimeLicKeyCount.Count);
             }
 
@@ -494,6 +506,7 @@ internal static class StructuredMsFormsParser
                 var offset = extraCursor;
                 site.ExtraProperties["controlSource"] = ReadFmString(data, offset, dataBlock.ControlSourceCount, siteEnd);
                 site.ExtraProperties["controlSourceOffset"] = stream.FileOffsets.Length > offset ? stream.FileOffsets[offset] : 0;
+                MsFormsBinary.AddStringSpan(site.ExtraProperties, "controlSource", dataBlock.ControlSourceCount, dataBlock.ControlSourceCountLocalOffset, offset, stream.FileOffsets);
                 extraCursor += Align4(dataBlock.ControlSourceCount.Count);
             }
 
@@ -503,10 +516,11 @@ internal static class StructuredMsFormsParser
                 var offset = extraCursor;
                 site.ExtraProperties["rowSource"] = ReadFmString(data, offset, dataBlock.RowSourceCount, siteEnd);
                 site.ExtraProperties["rowSourceOffset"] = stream.FileOffsets.Length > offset ? stream.FileOffsets[offset] : 0;
+                MsFormsBinary.AddStringSpan(site.ExtraProperties, "rowSource", dataBlock.RowSourceCount, dataBlock.RowSourceCountLocalOffset, offset, stream.FileOffsets);
                 extraCursor += Align4(dataBlock.RowSourceCount.Count);
             }
         }
-        catch
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException or OverflowException)
         {
             return false;
         }
@@ -614,11 +628,17 @@ internal static class StructuredMsFormsParser
     private sealed class InternalSiteDataBlock
     {
         public CountOfBytesWithCompressionFlag NameCount { get; set; }
+        public int NameCountLocalOffset { get; set; } = -1;
         public CountOfBytesWithCompressionFlag TagCount { get; set; }
+        public int TagCountLocalOffset { get; set; } = -1;
         public CountOfBytesWithCompressionFlag ControlTipCount { get; set; }
+        public int ControlTipCountLocalOffset { get; set; } = -1;
         public CountOfBytesWithCompressionFlag RuntimeLicKeyCount { get; set; }
+        public int RuntimeLicKeyCountLocalOffset { get; set; } = -1;
         public CountOfBytesWithCompressionFlag ControlSourceCount { get; set; }
+        public int ControlSourceCountLocalOffset { get; set; } = -1;
         public CountOfBytesWithCompressionFlag RowSourceCount { get; set; }
+        public int RowSourceCountLocalOffset { get; set; } = -1;
     }
 }
 

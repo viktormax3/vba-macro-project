@@ -200,8 +200,10 @@ internal static class ObjectStreamParser
         if (MsFormsBinary.HasBit(propMask, 3)) // fCaption
         {
             var count = (uint)properties["captionCount"]!;
-            properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(count));
-            cursor += MsFormsBinary.GetFmStringByteCount(count);
+            var captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(count);
+            properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount, -1, cursor, stream.FileOffsets);
+            cursor += MsFormsBinary.Align4(captionCount.Count);
         }
 
         int? width = null;
@@ -631,18 +633,21 @@ internal static class ObjectStreamParser
         if (valueCount != null)
         {
             properties["value"] = MsFormsBinary.ReadFmString(data, extraCursor, valueCount.Value);
+            MsFormsBinary.AddStringSpan(properties, "value", valueCount.Value, -1, extraCursor, stream.FileOffsets);
             extraCursor += Align4(valueCount.Value.Count);
         }
 
         if (captionCount != null)
         {
             properties["caption"] = MsFormsBinary.ReadFmString(data, extraCursor, captionCount.Value);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, -1, extraCursor, stream.FileOffsets);
             extraCursor += Align4(captionCount.Value.Count);
         }
 
         if (groupNameCount != null)
         {
             properties["groupName"] = MsFormsBinary.ReadFmString(data, extraCursor, groupNameCount.Value);
+            MsFormsBinary.AddStringSpan(properties, "groupName", groupNameCount.Value, -1, extraCursor, stream.FileOffsets);
             extraCursor += Align4(groupNameCount.Value.Count);
         }
 
@@ -719,6 +724,7 @@ internal static class ObjectStreamParser
         {
             MsFormsBinary.Align(ref cursor, 4);
             properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount.Value);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, -1, cursor, stream.FileOffsets);
             cursor += captionCount.Value.Count;
         }
 
