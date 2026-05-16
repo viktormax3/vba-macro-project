@@ -161,21 +161,23 @@ internal sealed class FrxBinary
         }
 
         var controls = new Dictionary<int, ControlInfo>();
+        var controlsBySiteId = new Dictionary<uint, string>();
         var pendingContainerOwners = new Queue<string>();
         var fStreams = storage.Streams
             .Where(s => s.Kind == "Stream" && s.Name == "f")
-            .OrderBy(s => s.Index)
+            .OrderBy(s => PathDepth(s.ParentPath))
+            .ThenBy(s => s.Index)
             .ToList();
-        for (var streamIndex = 0; streamIndex < fStreams.Count; streamIndex++)
+
+        foreach (var stream in fStreams)
         {
-            var stream = fStreams[streamIndex];
             if (stream.FileOffsets.Length != stream.Data.Length)
             {
                 continue;
             }
 
-            string? streamOwner = null;
-            if (streamIndex > 0 && pendingContainerOwners.Count > 0)
+            var streamOwner = ResolveStreamOwner(stream, controlsBySiteId);
+            if (streamOwner is null && stream.ParentPath is not null && !IsRootStoragePath(stream.ParentPath) && pendingContainerOwners.Count > 0)
             {
                 streamOwner = pendingContainerOwners.Dequeue();
             }
@@ -187,7 +189,13 @@ internal sealed class FrxBinary
             foreach (var control in streamControls)
             {
                 controls.TryAdd(control.NameOffset, control);
-                if (HasOwnStorage(control))
+
+                if (TryGetSiteId(control, out var siteId))
+                {
+                    controlsBySiteId[siteId] = control.Name;
+                }
+
+                if (HasOwnStorage(control) && !TryGetSiteId(control, out _))
                 {
                     pendingContainerOwners.Enqueue(control.Name);
                 }
@@ -202,6 +210,65 @@ internal sealed class FrxBinary
         }
 
         return controls.Values.ToList();
+    }
+
+    private static int PathDepth(string? path) =>
+        string.IsNullOrEmpty(path) ? 0 : path.Count(ch => ch == '/');
+
+    private static bool IsRootStoragePath(string path) =>
+        path.Equals("Root Entry", StringComparison.OrdinalIgnoreCase) ||
+        !path.Contains('/', StringComparison.Ordinal);
+
+    private static string? ResolveStreamOwner(StorageEntryDump stream, IReadOnlyDictionary<uint, string> controlsBySiteId)
+    {
+        if (string.IsNullOrEmpty(stream.ParentPath) || IsRootStoragePath(stream.ParentPath))
+        {
+            return null;
+        }
+
+        var slash = stream.ParentPath.LastIndexOf('/');
+        var storageName = slash >= 0 ? stream.ParentPath[(slash + 1)..] : stream.ParentPath;
+        if (storageName.Length > 1 && storageName[0] is 'i' or 'I' &&
+            uint.TryParse(storageName[1..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var siteId) &&
+            controlsBySiteId.TryGetValue(siteId, out var owner))
+        {
+            return owner;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetSiteId(ControlInfo control, out uint siteId)
+    {
+        siteId = 0;
+        if (control.Properties is null)
+        {
+            return false;
+        }
+
+        if (!control.Properties.TryGetValue("siteId", out var value) &&
+            !control.Properties.TryGetValue("id", out value))
+        {
+            return false;
+        }
+
+        switch (value)
+        {
+            case uint u:
+                siteId = u;
+                return true;
+            case int i when i >= 0:
+                siteId = (uint)i;
+                return true;
+            case long l when l >= 0 && l <= uint.MaxValue:
+                siteId = (uint)l;
+                return true;
+            case JsonElement { ValueKind: JsonValueKind.Number } element when element.TryGetUInt32(out var parsed):
+                siteId = parsed;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private IReadOnlyList<ControlInfo> BuildControlInfos(
@@ -315,6 +382,18 @@ internal sealed class FrxBinary
         IReadOnlyList<StorageEntryDump> streams,
         StorageEntryDump fStream)
     {
+        if (!string.IsNullOrEmpty(fStream.ParentPath))
+        {
+            var sameStorageObjectStream = streams.FirstOrDefault(s =>
+                s.Kind == "Stream" &&
+                s.Name == "o" &&
+                string.Equals(s.ParentPath, fStream.ParentPath, StringComparison.Ordinal));
+            if (sameStorageObjectStream is not null)
+            {
+                return sameStorageObjectStream;
+            }
+        }
+
         foreach (var stream in streams.Where(s => s.Index > fStream.Index).OrderBy(s => s.Index))
         {
             if (stream.Name == "f")

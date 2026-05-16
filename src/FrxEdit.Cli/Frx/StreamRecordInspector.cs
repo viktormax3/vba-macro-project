@@ -222,4 +222,14 @@ internal sealed record MsFormsPictureHeaderGuess(
     int DeclaredLength,
     string ClsidHex);
 
-internal sealed record StorageDirectoryEntry(string Name, byte Type, int StartSector, ulong Size);
+internal sealed record StorageDirectoryEntry(
+    int Index,
+    string Name,
+    byte Type,
+    int LeftSiblingId,
+    int RightSiblingId,
+    int ChildId,
+    int StartSector,
+    ulong Size);
+
+internal sealed record DirectoryPathInfo(string Path, string? ParentPath);

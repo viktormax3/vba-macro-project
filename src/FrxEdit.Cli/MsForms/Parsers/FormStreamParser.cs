@@ -28,7 +28,7 @@ internal static class FormStreamParser
         var marker = new ControlTypeMarker(
             site.TabIndexOffset > 0 ? site.TabIndexOffset : site.StreamStart,
             (byte)(site.TabIndex ?? 0),
-            (byte)((site.ClsidCacheIndex ?? 0) & 0x00FF));
+            (byte)(site.ClsidCacheIndex ?? 0));
 
         var fileOffsets = stream.FileOffsets;
         var placement = new Placement(
@@ -36,13 +36,15 @@ internal static class FormStreamParser
             site.Top ?? 0,
             null,
             null,
-            site.LeftOffset < fileOffsets.Length ? fileOffsets[site.LeftOffset] : 0,
-            site.TopOffset < fileOffsets.Length ? fileOffsets[site.TopOffset] : 0,
+            site.LeftOffset > 0 && site.LeftOffset < fileOffsets.Length ? fileOffsets[site.LeftOffset] : 0,
+            site.TopOffset > 0 && site.TopOffset < fileOffsets.Length ? fileOffsets[site.TopOffset] : 0,
             null,
             null);
 
         var properties = new Dictionary<string, object?>(site.ExtraProperties, StringComparer.OrdinalIgnoreCase)
         {
+            ["parser"] = "msOFormsFormSiteData",
+            ["siteParser"] = "msOFormsOleSiteConcrete",
             ["siteIndex"] = site.SiteIndex,
             ["siteDepth"] = site.Depth,
             ["siteType"] = site.SiteType,
@@ -53,10 +55,18 @@ internal static class FormStreamParser
             ["siteNameOffset"] = site.NameOffset < fileOffsets.Length ? fileOffsets[site.NameOffset] : 0,
         };
 
+        if (!string.IsNullOrEmpty(stream.Path))
+        {
+            properties["storagePath"] = stream.ParentPath;
+            properties["streamPath"] = stream.Path;
+        }
+
         if (site.Id != null)
         {
             properties["id"] = site.Id;
+            properties["siteId"] = site.Id;
             properties["idOffset"] = site.IdOffset < fileOffsets.Length ? fileOffsets[site.IdOffset] : 0;
+            properties["siteIdOffset"] = site.IdOffset < fileOffsets.Length ? fileOffsets[site.IdOffset] : 0;
         }
 
         if (site.HelpContextId != null)
@@ -74,11 +84,13 @@ internal static class FormStreamParser
         if (site.TabIndex != null)
         {
             properties["tabIndex"] = site.TabIndex;
+            properties["tabIndexOffset"] = site.TabIndexOffset < fileOffsets.Length ? fileOffsets[site.TabIndexOffset] : 0;
         }
 
         if (site.ClsidCacheIndex != null)
         {
             properties["clsidCacheIndex"] = site.ClsidCacheIndex;
+            properties["clsidCacheIndexOffset"] = site.ClsidCacheIndexOffset < fileOffsets.Length ? fileOffsets[site.ClsidCacheIndexOffset] : 0;
         }
 
         if (site.ObjectStreamSize != null)
@@ -94,12 +106,21 @@ internal static class FormStreamParser
             AddSiteFlags(properties, site.BitFlags.Value);
         }
 
-        ControlTypeSchema.TryGetMsFormsType((byte)((site.ClsidCacheIndex ?? 0) & 0x00FF), out var type);
+        var type = !string.IsNullOrWhiteSpace(site.ControlType) && !site.ControlType.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
+            ? site.ControlType
+            : ControlTypeSchema.TryGetMsFormsType((byte)(site.ClsidCacheIndex ?? 0), out var resolvedType)
+                ? resolvedType
+                : "Unknown";
 
-        if (objectStream != null && site.ObjectStreamSize > 0 && site.ObjectStreamLocalOffset >= 0)
+        var oProps = site.ObjectProperties;
+        if (oProps is null && objectStream != null && site.ObjectStreamSize > 0 && site.ObjectStreamLocalOffset >= 0)
         {
             var slice = SliceStorage(objectStream, site.ObjectStreamLocalOffset, site.ObjectStreamSize.Value);
-            var oProps = ObjectStreamParser.Read(slice, type);
+            oProps = ObjectStreamParser.Read(slice, type);
+        }
+
+        if (oProps != null)
+        {
             foreach (var prop in oProps.Properties)
             {
                 properties[prop.Key] = prop.Value;
@@ -126,7 +147,7 @@ internal static class FormStreamParser
             site.Name?.Length ?? 0,
             site.Name ?? string.Empty,
             site.Name ?? $"Control{site.SiteIndex}",
-            type ?? "Unknown",
+            type,
             placement,
             properties,
             objectStream);

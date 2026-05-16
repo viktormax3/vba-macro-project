@@ -24,6 +24,7 @@ internal static class CompoundStorageInspector
         var fat = ReadFat(bytes, oleOffset, sectorSize, fatSectorIds);
         var directoryBytes = ReadRegularStream(bytes, oleOffset, sectorSize, fat, firstDirectorySector);
         var entries = ReadDirectory(directoryBytes);
+        var pathMap = BuildDirectoryPaths(entries);
         var root = entries.FirstOrDefault(e => e.Type == 5);
         var rootRead = root is null
             ? new StreamRead([], [])
@@ -42,7 +43,7 @@ internal static class CompoundStorageInspector
                     : rootRead;
                 var data = read.Data;
                 var sample = Convert.ToHexString(data.AsSpan(0, Math.Min(32, data.Length)));
-                return new StorageEntryDump(
+                var dump = new StorageEntryDump(
                     index,
                     e.Name,
                     e.Type == 5 ? "Root" : "Stream",
@@ -55,6 +56,17 @@ internal static class CompoundStorageInspector
                     ScanResourceHits(data),
                     data,
                     read.FileOffsets);
+
+                if (pathMap.TryGetValue(e.Index, out var pathInfo))
+                {
+                    dump = dump with
+                    {
+                        Path = pathInfo.Path,
+                        ParentPath = pathInfo.ParentPath
+                    };
+                }
+
+                return dump;
             })
             .OrderBy(e => e.Index)
             .ToList();
@@ -254,12 +266,54 @@ internal static class CompoundStorageInspector
             }
 
             var name = Encoding.Unicode.GetString(entry[..Math.Min(nameLength - 2, 64)]).TrimEnd('\0');
+            var leftSiblingId = ReadInt32(entry, 0x44);
+            var rightSiblingId = ReadInt32(entry, 0x48);
+            var childId = ReadInt32(entry, 0x4C);
             var startSector = ReadInt32(entry, 0x74);
             var size = BinaryPrimitives.ReadUInt64LittleEndian(entry[0x78..]);
-            entries.Add(new StorageDirectoryEntry(name, type, startSector, size));
+            entries.Add(new StorageDirectoryEntry(offset / 128, name, type, leftSiblingId, rightSiblingId, childId, startSector, size));
         }
 
         return entries;
+    }
+
+    private static Dictionary<int, DirectoryPathInfo> BuildDirectoryPaths(IReadOnlyList<StorageDirectoryEntry> entries)
+    {
+        var result = new Dictionary<int, DirectoryPathInfo>();
+        var byIndex = entries.ToDictionary(e => e.Index);
+        var root = entries.FirstOrDefault(e => e.Type == 5);
+        if (root is null)
+        {
+            return result;
+        }
+
+        result[root.Index] = new DirectoryPathInfo(root.Name, null);
+        VisitSiblingTree(root.ChildId, root.Name, byIndex, result);
+        return result;
+    }
+
+    private static void VisitSiblingTree(
+        int entryId,
+        string parentPath,
+        IReadOnlyDictionary<int, StorageDirectoryEntry> entries,
+        Dictionary<int, DirectoryPathInfo> paths)
+    {
+        if (entryId < 0 || !entries.TryGetValue(entryId, out var entry))
+        {
+            return;
+        }
+
+        VisitSiblingTree(entry.LeftSiblingId, parentPath, entries, paths);
+
+        var path = string.IsNullOrEmpty(parentPath) ? entry.Name : parentPath + "/" + entry.Name;
+        paths[entry.Index] = new DirectoryPathInfo(path, parentPath);
+
+        if (entry.Type is 1 or 5)
+        {
+            VisitSiblingTree(entry.ChildId, path, entries, paths);
+        }
+
+        VisitSiblingTree(entry.RightSiblingId, parentPath, entries, paths);
     }
 
     private static StreamRead ReadStreamData(
@@ -511,6 +565,9 @@ internal sealed record StorageEntryDump(
     [property: JsonIgnore] byte[] Data,
     [property: JsonIgnore] int[] FileOffsets)
 {
+    public string Path { get; init; } = string.Empty;
+    public string? ParentPath { get; init; }
+
     public static StorageEntryDump CreateSegment(byte[] data, int[] fileOffsets)
     {
         return new StorageEntryDump(
