@@ -24,6 +24,7 @@ internal static class MsFormsBinary
         Align(ref cursor, alignment);
         var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
         properties[property] = formatColor ? $"&H{value:X8}&" : value;
+        properties[$"{property}LocalOffset"] = cursor;
         properties[$"{property}Offset"] = fileOffsets[cursor];
         cursor += 4;
         return value;
@@ -39,6 +40,7 @@ internal static class MsFormsBinary
         Align(ref cursor, 2);
         var value = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
         properties[property] = value;
+        properties[$"{property}LocalOffset"] = cursor;
         properties[$"{property}Offset"] = fileOffsets[cursor];
         cursor += 2;
         return value;
@@ -53,6 +55,7 @@ internal static class MsFormsBinary
     {
         var value = data[cursor];
         properties[property] = value;
+        properties[$"{property}LocalOffset"] = cursor;
         properties[$"{property}Offset"] = fileOffsets[cursor];
         cursor++;
         return value;
@@ -74,7 +77,8 @@ internal static class MsFormsBinary
             ["byteCount"] = count.Count,
             ["paddedByteCount"] = Align4(count.Count),
             ["compressed"] = count.Compressed,
-            ["inPlaceByteCapacity"] = count.Count
+            ["inPlaceByteCapacity"] = countLocalOffset >= 0 ? Align4(count.Count) : count.Count,
+            ["canUpdateCount"] = countLocalOffset >= 0
         };
 
         if (countLocalOffset >= 0)

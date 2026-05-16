@@ -1,11 +1,17 @@
-
+﻿
 internal static class FormStreamParser
 {
     public static IReadOnlyList<StructuredControlRecord> Read(
         StorageEntryDump stream,
         IReadOnlySet<string>? knownControlNames,
-        StorageEntryDump? objectStream = null)
+        StorageEntryDump? objectStream = null,
+        ParserMode parserMode = ParserMode.Tolerant)
     {
+        if (parserMode == ParserMode.Legacy)
+        {
+            return LegacyNameScanParser.Scan(stream, knownControlNames);
+        }
+
         var sites = StructuredMsFormsParser.Parse(stream);
         if (sites.Count > 0)
         {
@@ -17,8 +23,14 @@ internal static class FormStreamParser
             return sites.Select(s => MapToRecord(s, stream, objectStream)).ToList();
         }
 
+        if (parserMode == ParserMode.Strict)
+        {
+            throw new CliException($"Strict parser mode could not parse FormSiteData in stream '{stream.Path ?? stream.Name}'.");
+        }
+
         return LegacyNameScanParser.Scan(stream, knownControlNames);
     }
+
 
     private static StructuredControlRecord MapToRecord(
         SiteDescriptor site,

@@ -44,6 +44,23 @@
     public string RequireOption(string name) =>
         GetOption(name) ?? throw new CliException($"Missing required option '--{name}'.");
 
+    public ParserMode GetParserModeOption(string name, ParserMode defaultValue)
+    {
+        var value = GetOption(name);
+        if (value is null)
+        {
+            return defaultValue;
+        }
+
+        return value.ToLowerInvariant() switch
+        {
+            "tolerant" => ParserMode.Tolerant,
+            "strict" => ParserMode.Strict,
+            "legacy" => ParserMode.Legacy,
+            _ => throw new CliException($"Option '--{name}' must be one of: tolerant, strict, legacy.")
+        };
+    }
+
     public int GetIntOption(string name, int defaultValue)
     {
         var value = GetOption(name);

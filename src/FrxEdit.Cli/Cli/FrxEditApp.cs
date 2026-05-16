@@ -51,7 +51,8 @@
         var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
         var frmPath = Path.GetFullPath(parsed.Positionals[0]);
         var project = UserFormProject.Load(frmPath);
-        var layout = FrxBinary.Read(project.FrxPath).Inspect(project.KnownControlNames, project.ControlScopes);
+        var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
+        var layout = FrxBinary.Read(project.FrxPath).Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
         var rawDocument = new LayoutDocument(project.FormName, Path.GetFileName(project.FrxPath), project.FormProperties, layout.Controls);
         var humanDocument = HumanLayoutDocument.FromRaw(rawDocument);
         WriteJson(parsed.GetOption("out"), humanDocument);
@@ -80,10 +81,11 @@
 
         var project = UserFormProject.Load(frmPath);
         var frx = FrxBinary.Read(project.FrxPath);
-        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes);
+        var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
+        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
         PatchValidator.Validate(patch, layout.Controls);
 
-        frx.Apply(patch, project.KnownControlNames, project.ControlScopes);
+        frx.Apply(patch, project.KnownControlNames, project.ControlScopes, parserMode);
 
         var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
         Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
@@ -104,10 +106,12 @@
         var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
         var project = UserFormProject.Load(Path.GetFullPath(parsed.Positionals[0]));
         var frx = FrxBinary.Read(project.FrxPath);
-        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes);
+        var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
+        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
         stdout.WriteLine($"OK: {Path.GetFileName(project.FrmPath)} references {Path.GetFileName(project.FrxPath)}");
         stdout.WriteLine($"OK: FRX prefix {frx.PrefixLength} bytes, OLE compound starts at 0x{frx.OleOffset:X}");
         stdout.WriteLine($"OK: {layout.Controls.Count} controls detected");
+        stdout.WriteLine($"OK: parser mode {parserMode.ToString().ToLowerInvariant()}");
         return 0;
     }
 
@@ -168,10 +172,10 @@
 
     private void PrintHelp()
     {
-        stdout.WriteLine("frxedit inspect <UserForm.frm> [--out layout.json]");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> [--mode tolerant|strict|legacy] [--out layout.json]");
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
-        stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm>");
-        stdout.WriteLine("frxedit validate <UserForm.frm>");
+        stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
+        stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");
         stdout.WriteLine("frxedit dump-stream-records <UserForm.frm> [--out stream-records.json]");

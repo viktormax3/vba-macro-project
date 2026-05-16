@@ -1,4 +1,4 @@
-internal sealed class FrxBinary
+﻿internal sealed class FrxBinary
 {
     private const double FrxUnitsPerPoint = 2540.0 / 72.0;
     private const int RecordBlockGapThreshold = 512;
@@ -60,17 +60,80 @@ internal sealed class FrxBinary
 
     public LayoutInspection Inspect(
         IReadOnlySet<string>? knownControlNames = null,
-        IReadOnlyDictionary<string, string>? controlScopes = null)
+        IReadOnlyDictionary<string, string>? controlScopes = null,
+        ParserMode parserMode = ParserMode.Tolerant)
     {
-        var structured = InspectStructuredStorage(knownControlNames, controlScopes);
+        if (parserMode == ParserMode.Legacy)
+        {
+            return InspectByNameScan(knownControlNames, controlScopes);
+        }
+
+        var structured = InspectStructuredStorage(knownControlNames, controlScopes, parserMode);
         if (structured.Count > 0)
         {
             var orderedStructured = structured.OrderBy(c => c.NameOffset).ToList();
             var annotatedStructured = AnnotateRecordOrder(orderedStructured);
-            return new LayoutInspection(AddContainerDimensions(annotatedStructured));
+            var controls = AddContainerDimensions(annotatedStructured);
+            ValidateParserMode(parserMode, controls);
+            return new LayoutInspection(controls);
+        }
+
+        if (parserMode == ParserMode.Strict)
+        {
+            throw new CliException("Strict parser mode could not parse any MSForms controls from the FRX structured storage.");
         }
 
         return InspectByNameScan(knownControlNames, controlScopes);
+    }
+
+    private static void ValidateParserMode(ParserMode parserMode, IReadOnlyList<ControlInfo> controls)
+    {
+        if (parserMode != ParserMode.Strict)
+        {
+            return;
+        }
+
+        foreach (var control in controls)
+        {
+            var props = control.Properties;
+            if (props is null)
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': missing parser properties.");
+            }
+
+            if (props.ContainsKey("legacyScanner"))
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': legacy scanner fallback was used.");
+            }
+
+            if (string.IsNullOrWhiteSpace(control.Name) || string.IsNullOrWhiteSpace(control.Type) ||
+                control.Type.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException("Strict parser mode rejected a control with missing name or type.");
+            }
+
+            if (control.Left is null || control.Top is null)
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': missing position.");
+            }
+
+            if (control.RawWidth is null || control.RawHeight is null)
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': missing size.");
+            }
+
+            if (props.TryGetValue("objectStreamSizeValidation", out var validation) &&
+                validation is string validationText &&
+                !validationText.Equals("exact", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException($"Strict parser mode rejected storage for '{control.Name}': object stream validation is '{validationText}'.");
+            }
+
+            if (props.ContainsKey("objectStreamError"))
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': object stream error was reported.");
+            }
+        }
     }
 
     private LayoutInspection InspectByNameScan(
@@ -148,7 +211,8 @@ internal sealed class FrxBinary
 
     private IReadOnlyList<ControlInfo> InspectStructuredStorage(
         IReadOnlySet<string>? knownControlNames,
-        IReadOnlyDictionary<string, string>? controlScopes)
+        IReadOnlyDictionary<string, string>? controlScopes,
+        ParserMode parserMode)
     {
         CompoundStorageDump storage;
         try
@@ -189,7 +253,7 @@ internal sealed class FrxBinary
             }
 
             var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
-            var streamRecords = FormStreamParser.Read(stream, knownControlNames, pairedOStream);
+            var streamRecords = FormStreamParser.Read(stream, knownControlNames, pairedOStream, parserMode);
             var streamControls = BuildControlInfos(streamRecords, streamOwner, controlScopes);
 
             foreach (var control in streamControls)
@@ -708,9 +772,10 @@ internal sealed class FrxBinary
     public void Apply(
         PatchDocument patch,
         IReadOnlySet<string>? knownControlNames = null,
-        IReadOnlyDictionary<string, string>? controlScopes = null)
+        IReadOnlyDictionary<string, string>? controlScopes = null,
+        ParserMode parserMode = ParserMode.Tolerant)
     {
-        var controls = Inspect(knownControlNames, controlScopes).Controls.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var controls = Inspect(knownControlNames, controlScopes, parserMode).Controls.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         var nameMap = patch.Renames ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var reverseNameMap = nameMap.ToDictionary(kvp => kvp.Value, kvp => kvp.Key, StringComparer.OrdinalIgnoreCase);
         foreach (var (patchName, requested) in patch.Layout ?? new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase))
@@ -927,13 +992,28 @@ internal sealed class FrxBinary
             bytes = Encoding.Unicode.GetBytes(text);
         }
 
-        if (bytes.Length > span.InPlaceByteCapacity)
+        if (bytes.Length > span.InPlaceByteCapacity || Align4(bytes.Length) > span.PaddedByteCount)
         {
             throw new CliException($"Property '{property}' for '{controlName}' is longer than the current in-place capacity ({span.InPlaceByteCapacity} bytes). Rebuild editing will be needed for longer strings.");
         }
 
+        if (span.CountOffset is not null)
+        {
+            var count = (uint)bytes.Length;
+            if (span.Compressed)
+            {
+                count |= 0x8000_0000u;
+            }
+
+            BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(span.CountOffset.Value, 4), count);
+        }
+        else if (bytes.Length != span.ByteCount)
+        {
+            throw new CliException($"Property '{property}' for '{controlName}' has no count offset metadata, so the current in-place editor can only write strings with exactly {span.ByteCount} bytes.");
+        }
+
         bytes.CopyTo(Bytes.AsSpan(span.DataOffset, bytes.Length));
-        Bytes.AsSpan(span.DataOffset + bytes.Length, span.InPlaceByteCapacity - bytes.Length).Clear();
+        Bytes.AsSpan(span.DataOffset + bytes.Length, span.PaddedByteCount - bytes.Length).Clear();
     }
 
     private static bool TryGetStringSpan(Dictionary<string, object?> properties, string property, out StringSpanInfo span)
@@ -946,13 +1026,20 @@ internal sealed class FrxBinary
 
         if (!TryReadInt(dict, "dataOffset", out var dataOffset) ||
             !TryReadInt(dict, "byteCount", out var byteCount) ||
+            !TryReadInt(dict, "paddedByteCount", out var paddedByteCount) ||
             !TryReadInt(dict, "inPlaceByteCapacity", out var capacity))
         {
             return false;
         }
 
+        int? countOffset = null;
+        if (TryReadInt(dict, "countOffset", out var parsedCountOffset) && parsedCountOffset > 0)
+        {
+            countOffset = parsedCountOffset;
+        }
+
         var compressed = dict.TryGetValue("compressed", out var compressedValue) && compressedValue is bool compressedBool && compressedBool;
-        span = new StringSpanInfo(dataOffset, byteCount, capacity, compressed);
+        span = new StringSpanInfo(dataOffset, countOffset, byteCount, paddedByteCount, capacity, compressed);
         return true;
     }
 
@@ -983,7 +1070,9 @@ internal sealed class FrxBinary
         }
     }
 
-    private readonly record struct StringSpanInfo(int DataOffset, int ByteCount, int InPlaceByteCapacity, bool Compressed);
+    private static int Align4(int value) => (value + 3) & ~3;
+
+    private readonly record struct StringSpanInfo(int DataOffset, int? CountOffset, int ByteCount, int PaddedByteCount, int InPlaceByteCapacity, bool Compressed);
 
     private static int GetRequiredIntProperty(Dictionary<string, object?> properties, string property, string controlName)
     {

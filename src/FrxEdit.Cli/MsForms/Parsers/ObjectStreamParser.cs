@@ -146,6 +146,8 @@ internal static class ObjectStreamParser
         }
         if (MsFormsBinary.HasBit(propMask, 3)) // fCaption (ExtraData count)
         {
+            properties["captionCountLocalOffset"] = cursor;
+            properties["captionCountOffset"] = stream.FileOffsets[cursor];
             properties["captionCount"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
             cursor += 4;
         }
@@ -202,7 +204,7 @@ internal static class ObjectStreamParser
             var count = (uint)properties["captionCount"]!;
             var captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(count);
             properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount);
-            MsFormsBinary.AddStringSpan(properties, "caption", captionCount, -1, cursor, stream.FileOffsets);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount, LocalOffsetOf(properties, "captionCount"), cursor, stream.FileOffsets);
             cursor += MsFormsBinary.Align4(captionCount.Count);
         }
 
@@ -584,16 +586,31 @@ internal static class ObjectStreamParser
         CountOfBytesWithCompressionFlag? valueCount = null;
         CountOfBytesWithCompressionFlag? captionCount = null;
         CountOfBytesWithCompressionFlag? groupNameCount = null;
+        int valueCountLocalOffset = -1;
+        int captionCountLocalOffset = -1;
+        int groupNameCountLocalOffset = -1;
 
-        if (MsFormsBinary.HasBit64(propMask, 22)) valueCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "valueCount", properties));
-        if (MsFormsBinary.HasBit64(propMask, 23)) captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "captionCount", properties));
+        if (MsFormsBinary.HasBit64(propMask, 22))
+        {
+            valueCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "valueCount", properties));
+            valueCountLocalOffset = LocalOffsetOf(properties, "valueCount");
+        }
+        if (MsFormsBinary.HasBit64(propMask, 23))
+        {
+            captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "captionCount", properties));
+            captionCountLocalOffset = LocalOffsetOf(properties, "captionCount");
+        }
         if (MsFormsBinary.HasBit64(propMask, 24)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "picturePosition", properties);
         if (MsFormsBinary.HasBit64(propMask, 25)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "borderColor", properties, true);
         if (MsFormsBinary.HasBit64(propMask, 26)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "specialEffect", properties);
         if (MsFormsBinary.HasBit64(propMask, 27)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "mouseIconMarker", properties);
         if (MsFormsBinary.HasBit64(propMask, 28)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "pictureMarker", properties);
         if (MsFormsBinary.HasBit64(propMask, 29)) properties["accelerator"] = (char)MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "acceleratorCode", properties);
-        if (MsFormsBinary.HasBit64(propMask, 32)) groupNameCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "groupNameCount", properties));
+        if (MsFormsBinary.HasBit64(propMask, 32))
+        {
+            groupNameCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "groupNameCount", properties));
+            groupNameCountLocalOffset = LocalOffsetOf(properties, "groupNameCount");
+        }
         if (MsFormsBinary.HasBit64(propMask, 33)) properties["textAlign"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "textAlign", properties);
         if (MsFormsBinary.HasBit64(propMask, 34)) properties["dropEffect"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "dropEffect", properties);
 
@@ -633,21 +650,21 @@ internal static class ObjectStreamParser
         if (valueCount != null)
         {
             properties["value"] = MsFormsBinary.ReadFmString(data, extraCursor, valueCount.Value);
-            MsFormsBinary.AddStringSpan(properties, "value", valueCount.Value, -1, extraCursor, stream.FileOffsets);
+            MsFormsBinary.AddStringSpan(properties, "value", valueCount.Value, valueCountLocalOffset, extraCursor, stream.FileOffsets);
             extraCursor += Align4(valueCount.Value.Count);
         }
 
         if (captionCount != null)
         {
             properties["caption"] = MsFormsBinary.ReadFmString(data, extraCursor, captionCount.Value);
-            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, -1, extraCursor, stream.FileOffsets);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, captionCountLocalOffset, extraCursor, stream.FileOffsets);
             extraCursor += Align4(captionCount.Value.Count);
         }
 
         if (groupNameCount != null)
         {
             properties["groupName"] = MsFormsBinary.ReadFmString(data, extraCursor, groupNameCount.Value);
-            MsFormsBinary.AddStringSpan(properties, "groupName", groupNameCount.Value, -1, extraCursor, stream.FileOffsets);
+            MsFormsBinary.AddStringSpan(properties, "groupName", groupNameCount.Value, groupNameCountLocalOffset, extraCursor, stream.FileOffsets);
             extraCursor += Align4(groupNameCount.Value.Count);
         }
 
@@ -694,6 +711,7 @@ internal static class ObjectStreamParser
         };
 
         CountOfBytesWithCompressionFlag? captionCount = null;
+        var captionCountLocalOffset = -1;
         if (MsFormsBinary.HasBit(propMask, 0)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "foreColor", properties, formatColor: true);
         if (MsFormsBinary.HasBit(propMask, 1)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, formatColor: true);
         if (MsFormsBinary.HasBit(propMask, 2))
@@ -705,6 +723,7 @@ internal static class ObjectStreamParser
         if (MsFormsBinary.HasBit(propMask, 3))
         {
             captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "captionCount", properties));
+            captionCountLocalOffset = LocalOffsetOf(properties, "captionCount");
         }
 
         if (MsFormsBinary.HasBit(propMask, 4)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "picturePosition", properties);
@@ -724,7 +743,7 @@ internal static class ObjectStreamParser
         {
             MsFormsBinary.Align(ref cursor, 4);
             properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount.Value);
-            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, -1, cursor, stream.FileOffsets);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, captionCountLocalOffset, cursor, stream.FileOffsets);
             cursor += captionCount.Value.Count;
         }
 
@@ -754,6 +773,13 @@ internal static class ObjectStreamParser
         }
 
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
+    }
+
+    private static int LocalOffsetOf(Dictionary<string, object?> properties, string propertyName)
+    {
+        return properties.TryGetValue($"{propertyName}LocalOffset", out var value) && value is int offset
+            ? offset
+            : -1;
     }
 
     private static void AddVariousPropertyBits(Dictionary<string, object?> properties, uint value) => MsFormsBinary.AddVariousPropertyBits(properties, value);
