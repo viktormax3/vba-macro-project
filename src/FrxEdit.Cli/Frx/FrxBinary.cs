@@ -1,6 +1,6 @@
 internal sealed class FrxBinary
 {
-    private const double FrxUnitsPerPoint = 35.25;
+    private const double FrxUnitsPerPoint = 2540.0 / 72.0;
     private const int RecordBlockGapThreshold = 512;
     private static readonly byte[] OleSignature = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
     private static readonly Regex ControlNameRegex = new(
@@ -130,8 +130,8 @@ internal sealed class FrxBinary
                 placement?.RawHeight,
                 ToPoints(placement?.Left),
                 ToPoints(placement?.Top),
-                null,
-                null,
+                ToPoints(placement?.RawWidth),
+                ToPoints(placement?.RawHeight),
                 ReadKnownProperties(type, nameOffset),
                 controlScopes?.TryGetValue(name, out var scope) == true ? scope : null,
                 binaryName.Equals(name, StringComparison.OrdinalIgnoreCase) ? null : binaryName,
@@ -162,6 +162,7 @@ internal sealed class FrxBinary
 
         var controls = new Dictionary<int, ControlInfo>();
         var controlsBySiteId = new Dictionary<uint, string>();
+        var formControlByOwner = new Dictionary<string, FormControlProperties>(StringComparer.OrdinalIgnoreCase);
         var pendingContainerOwners = new Queue<string>();
         var fStreams = storage.Streams
             .Where(s => s.Kind == "Stream" && s.Name == "f")
@@ -180,6 +181,11 @@ internal sealed class FrxBinary
             if (streamOwner is null && stream.ParentPath is not null && !IsRootStoragePath(stream.ParentPath) && pendingContainerOwners.Count > 0)
             {
                 streamOwner = pendingContainerOwners.Dequeue();
+            }
+
+            if (streamOwner is not null && FormControlParser.TryRead(stream, out var formControlProperties))
+            {
+                formControlByOwner[streamOwner] = formControlProperties;
             }
 
             var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
@@ -207,6 +213,18 @@ internal sealed class FrxBinary
         {
             var key = controls.Keys.Single();
             controls[key] = EnrichSingleControlFromOStream(controls[key], objectStreams[0]);
+        }
+
+        if (formControlByOwner.Count > 0)
+        {
+            foreach (var key in controls.Keys.ToList())
+            {
+                var control = controls[key];
+                if (formControlByOwner.TryGetValue(control.Name, out var formControl))
+                {
+                    controls[key] = ApplyFormControlProperties(control, formControl);
+                }
+            }
         }
 
         return controls.Values.ToList();
@@ -335,8 +353,8 @@ internal sealed class FrxBinary
             record.Placement.RawHeight,
             ToPoints(record.Placement.Left),
             ToPoints(record.Placement.Top),
-            null,
-            null,
+            ToPoints(record.Placement.RawWidth),
+            ToPoints(record.Placement.RawHeight),
             properties,
             siteParent ?? (controlScopes?.TryGetValue(record.Name, out var scope) == true ? scope : null),
             record.RawName.Equals(record.Name, StringComparison.OrdinalIgnoreCase) ? null : record.RawName,
@@ -571,13 +589,39 @@ internal sealed class FrxBinary
         return annotated;
     }
 
+    private static ControlInfo ApplyFormControlProperties(ControlInfo control, FormControlProperties formControl)
+    {
+        var properties = control.Properties is null
+            ? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in formControl.Properties)
+        {
+            properties.TryAdd(name, value);
+        }
+
+        var width = formControl.DisplayedWidth ?? control.RawWidth;
+        var height = formControl.DisplayedHeight ?? control.RawHeight;
+        return control with
+        {
+            RawWidth = width,
+            RawHeight = height,
+            WidthPt = ToPoints(width),
+            HeightPt = ToPoints(height),
+            WidthOffset = formControl.DisplayedWidthOffset ?? control.WidthOffset,
+            HeightOffset = formControl.DisplayedHeightOffset ?? control.HeightOffset,
+            Properties = WithProperty(properties, "sizeSource", "formControlDisplayedSize")
+        };
+    }
+
     private IReadOnlyList<ControlInfo> AddContainerDimensions(IReadOnlyList<ControlInfo> controls)
     {
         var result = controls.ToArray();
         for (var i = 0; i < result.Length; i++)
         {
             var control = result[i];
-            if (!control.Type.Equals("Frame", StringComparison.OrdinalIgnoreCase))
+            if (!control.Type.Equals("Frame", StringComparison.OrdinalIgnoreCase) ||
+                control.RawWidth is not null && control.RawHeight is not null)
             {
                 continue;
             }
@@ -605,7 +649,7 @@ internal sealed class FrxBinary
                 HeightPt = ToPoints(dimensions.Height),
                 WidthOffset = dimensions.WidthOffset,
                 HeightOffset = dimensions.HeightOffset,
-                Properties = WithProperty(control.Properties, "sizeSource", "containerPropertyBag")
+                Properties = WithProperty(control.Properties, "sizeSource", "legacyContainerDimensionFallback")
             };
         }
 
@@ -724,13 +768,28 @@ internal sealed class FrxBinary
     {
         if (patch.Width is not null || patch.Height is not null)
         {
-            throw new CliException("Patch fields 'width' and 'height' are not writable yet because FRX size encoding is not fully mapped. Use 'rawWidth'/'rawHeight' only for low-level experiments.");
+            throw new CliException("Patch fields 'width' and 'height' are reserved. Use 'widthPt'/'heightPt' for human-friendly edits or 'rawWidth'/'rawHeight' for low-level experiments.");
         }
 
-        WriteOptionalInt(control.LeftOffset, patch.Left, control.Name, "left");
-        WriteOptionalInt(control.TopOffset, patch.Top, control.Name, "top");
-        WriteOptionalInt(control.WidthOffset, patch.RawWidth, control.Name, "rawWidth");
-        WriteOptionalInt(control.HeightOffset, patch.RawHeight, control.Name, "rawHeight");
+        WriteOptionalInt(control.LeftOffset, ResolvePatchUnit(patch.Left, patch.LeftPt, "left", "leftPt"), control.Name, "left");
+        WriteOptionalInt(control.TopOffset, ResolvePatchUnit(patch.Top, patch.TopPt, "top", "topPt"), control.Name, "top");
+        WriteOptionalInt(control.WidthOffset, ResolvePatchUnit(patch.RawWidth, patch.WidthPt, "rawWidth", "widthPt"), control.Name, "width");
+        WriteOptionalInt(control.HeightOffset, ResolvePatchUnit(patch.RawHeight, patch.HeightPt, "rawHeight", "heightPt"), control.Name, "height");
+    }
+
+    private static int? ResolvePatchUnit(int? rawValue, double? pointValue, string rawName, string pointName)
+    {
+        if (rawValue is not null && pointValue is not null)
+        {
+            throw new CliException($"Patch cannot specify both '{rawName}' and '{pointName}' for the same dimension.");
+        }
+
+        if (rawValue is not null)
+        {
+            return rawValue;
+        }
+
+        return FromPoints(pointValue);
     }
 
     private void WriteOptionalInt(int? offset, int? value, string name, string property)
@@ -1037,6 +1096,9 @@ internal sealed class FrxBinary
 
     private static double? ToPoints(int? value) =>
         value is null ? null : Math.Round(value.Value / FrxUnitsPerPoint, 2);
+
+    private static int? FromPoints(double? value) =>
+        value is null ? null : (int)Math.Round(value.Value * FrxUnitsPerPoint, MidpointRounding.AwayFromZero);
 
     private static bool IsPlausiblePosition(int value) => value is >= 0 and <= 40_000;
 

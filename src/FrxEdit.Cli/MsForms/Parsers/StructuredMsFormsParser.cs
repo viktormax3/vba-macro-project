@@ -101,6 +101,18 @@ internal static class StructuredMsFormsParser
             site.ObjectProperties = ObjectStreamParser.Read(subStream, site.ControlType);
             cursor += size;
         }
+
+        if (sites.Count > 0)
+        {
+            var validationTarget = sites.First();
+            validationTarget.ExtraProperties["objectStreamConsumedBytes"] = cursor;
+            validationTarget.ExtraProperties["objectStreamLength"] = data.Length;
+            validationTarget.ExtraProperties["objectStreamSizeValidation"] = cursor == data.Length
+                ? "exact"
+                : cursor < data.Length
+                    ? $"under-consumed by {data.Length - cursor} bytes"
+                    : $"over-consumed by {cursor - data.Length} bytes";
+        }
     }
 
     private static bool TryReadFormSiteData(
@@ -318,6 +330,8 @@ internal static class StructuredMsFormsParser
             {
                 dataBlock.TagCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["siteTagCountRaw"] = raw;
+                site.ExtraProperties["tagByteCount"] = dataBlock.TagCount.Count;
+                site.ExtraProperties["tagCompressed"] = dataBlock.TagCount.Compressed;
             }
 
             if (mask.HasID)
@@ -377,24 +391,32 @@ internal static class StructuredMsFormsParser
             {
                 dataBlock.ControlTipCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["controlTipTextCountRaw"] = raw;
+                site.ExtraProperties["controlTipTextByteCount"] = dataBlock.ControlTipCount.Count;
+                site.ExtraProperties["controlTipTextCompressed"] = dataBlock.ControlTipCount.Compressed;
             }
 
             if (mask.HasRuntimeLicKey)
             {
                 dataBlock.RuntimeLicKeyCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["runtimeLicKeyCountRaw"] = raw;
+                site.ExtraProperties["runtimeLicKeyByteCount"] = dataBlock.RuntimeLicKeyCount.Count;
+                site.ExtraProperties["runtimeLicKeyCompressed"] = dataBlock.RuntimeLicKeyCount.Compressed;
             }
 
             if (mask.HasControlSource)
             {
                 dataBlock.ControlSourceCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["controlSourceCountRaw"] = raw;
+                site.ExtraProperties["controlSourceByteCount"] = dataBlock.ControlSourceCount.Count;
+                site.ExtraProperties["controlSourceCompressed"] = dataBlock.ControlSourceCount.Compressed;
             }
 
             if (mask.HasRowSource)
             {
                 dataBlock.RowSourceCount = ReadCount(data, ref dataCursor, siteStart, siteEnd, out var raw);
                 site.ExtraProperties["rowSourceCountRaw"] = raw;
+                site.ExtraProperties["rowSourceByteCount"] = dataBlock.RowSourceCount.Count;
+                site.ExtraProperties["rowSourceCompressed"] = dataBlock.RowSourceCount.Compressed;
             }
         }
         catch

@@ -1,4 +1,4 @@
-﻿internal sealed class PatchDocument
+internal sealed class PatchDocument
 {
     public Dictionary<string, string>? Renames { get; set; }
     public Dictionary<string, LayoutPatch>? Layout { get; set; }
@@ -8,12 +8,21 @@
 
 internal sealed class LayoutPatch
 {
+    // Low-level FRX units. Kept for backwards compatibility and diagnostics.
     public int? Left { get; set; }
     public int? Top { get; set; }
-    public int? Width { get; set; }
-    public int? Height { get; set; }
     public int? RawWidth { get; set; }
     public int? RawHeight { get; set; }
+
+    // Human-friendly points. These are converted to FRX units at apply time.
+    public double? LeftPt { get; set; }
+    public double? TopPt { get; set; }
+    public double? WidthPt { get; set; }
+    public double? HeightPt { get; set; }
+
+    // Reserved aliases. Prefer widthPt/heightPt or rawWidth/rawHeight.
+    public int? Width { get; set; }
+    public int? Height { get; set; }
 }
 
 internal sealed class AddControlPatch

@@ -1,4 +1,4 @@
-﻿internal sealed record LayoutDocument(
+internal sealed record LayoutDocument(
     string FormName,
     string FrxFile,
     Dictionary<string, object?> FormProperties,
@@ -20,19 +20,14 @@ internal sealed record HumanLayoutDocument(
         "accelerator",
         "backColor",
         "foreColor",
+        "borderColor",
         "fontName",
         "fontSize",
+        "fontWeight",
         "fontEffects",
-        "fontEffectsHex",
         "fontItalic",
         "fontUnderline",
         "fontStrikethrough",
-        "fontCharSet",
-        "fontPitchAndFamily",
-        "paragraphAlign",
-        "fontWeight",
-        "default",
-        "cancel",
         "enabled",
         "visible",
         "locked",
@@ -41,8 +36,16 @@ internal sealed record HumanLayoutDocument(
         "wordWrap",
         "autoSize",
         "specialEffect",
+        "borderStyle",
+        "displayStyle",
+        "mousePointer",
         "picturePosition",
-        "sizeSource"
+        "min",
+        "max",
+        "position",
+        "smallChange",
+        "largeChange",
+        "orientation"
     ];
 
     public static HumanLayoutDocument FromRaw(LayoutDocument raw)
@@ -57,24 +60,15 @@ internal sealed record HumanLayoutDocument(
     private static HumanControlInfo ToHumanControl(ControlInfo control)
     {
         var bounds = new HumanBounds(
-            control.LeftPt,
-            control.TopPt,
-            control.WidthPt,
-            control.HeightPt,
-            control.Left,
-            control.Top,
-            control.RawWidth,
-            control.RawHeight,
-            LeftEditable: control.LeftOffset is not null,
-            TopEditable: control.TopOffset is not null,
-            RawWidthEditable: control.WidthOffset is not null,
-            RawHeightEditable: control.HeightOffset is not null);
+            Left: new HumanMeasure(control.LeftPt, control.LeftOffset is not null),
+            Top: new HumanMeasure(control.TopPt, control.TopOffset is not null),
+            Width: new HumanMeasure(control.WidthPt, control.WidthOffset is not null),
+            Height: new HumanMeasure(control.HeightPt, control.HeightOffset is not null));
 
         return new HumanControlInfo(
             control.Name,
             control.Type,
             control.Parent,
-            control.BinaryName,
             bounds,
             BuildHumanProperties(control));
     }
@@ -95,20 +89,23 @@ internal sealed record HumanLayoutDocument(
             }
         }
 
-        if (control.Properties?.TryGetValue("caption", out var caption) == true)
-        {
-            values["caption"] = caption;
-            sources["caption"] = "frx";
-        }
-
         AddDefaultPlaceholders(control.Type, values, sources);
 
-        return values
-            .Select(pair => new HumanProperty(
-                pair.Key,
-                pair.Value,
-                sources.TryGetValue(pair.Key, out var source) ? source : "unknown",
-                IsCurrentlyEditable(pair.Key, control.Properties)))
+        return HumanPropertyOrder
+            .Where(values.ContainsKey)
+            .Select(name => new HumanProperty(
+                name,
+                values[name],
+                sources.TryGetValue(name, out var source) ? source : "unknown",
+                IsCurrentlyEditable(name, control.Properties)))
+            .Concat(values.Keys
+                .Where(name => !HumanPropertyOrder.Contains(name, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .Select(name => new HumanProperty(
+                    name,
+                    values[name],
+                    sources.TryGetValue(name, out var source) ? source : "unknown",
+                    IsCurrentlyEditable(name, control.Properties))))
             .ToList();
     }
 
@@ -158,7 +155,7 @@ internal sealed record HumanLayoutDocument(
         {
             "caption" or "tag" or "controltiptext" or "fontname" =>
                 properties.ContainsKey($"{name}Offset"),
-            "backcolor" or "forecolor" or "fontsize" =>
+            "backcolor" or "forecolor" or "fontsize" or "bordercolor" =>
                 properties.ContainsKey($"{name}Offset"),
             "tabindex" =>
                 properties.ContainsKey("recordMarkerOffset"),
@@ -171,23 +168,16 @@ internal sealed record HumanControlInfo(
     string Name,
     string Type,
     string? Parent,
-    string? BinaryName,
     HumanBounds Bounds,
     IReadOnlyList<HumanProperty> Properties);
 
 internal sealed record HumanBounds(
-    double? LeftPt,
-    double? TopPt,
-    double? WidthPt,
-    double? HeightPt,
-    int? LeftRaw,
-    int? TopRaw,
-    int? WidthRaw,
-    int? HeightRaw,
-    bool LeftEditable,
-    bool TopEditable,
-    bool RawWidthEditable,
-    bool RawHeightEditable);
+    HumanMeasure Left,
+    HumanMeasure Top,
+    HumanMeasure Width,
+    HumanMeasure Height);
+
+internal sealed record HumanMeasure(double? Pt, bool Editable);
 
 internal sealed record HumanProperty(string Name, object? Value, string Source, bool Editable);
 
