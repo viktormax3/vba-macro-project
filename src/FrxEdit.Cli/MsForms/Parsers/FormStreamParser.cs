@@ -26,9 +26,9 @@ internal static class FormStreamParser
         StorageEntryDump? objectStream)
     {
         var marker = new ControlTypeMarker(
-            site.StreamStart,
+            site.TabIndexOffset > 0 ? site.TabIndexOffset : site.StreamStart,
             (byte)(site.TabIndex ?? 0),
-            (byte)(site.ClsidCacheIndex ?? 0));
+            (byte)((site.ClsidCacheIndex ?? 0) & 0x00FF));
 
         var fileOffsets = stream.FileOffsets;
         var placement = new Placement(
@@ -94,7 +94,7 @@ internal static class FormStreamParser
             AddSiteFlags(properties, site.BitFlags.Value);
         }
 
-        ControlTypeSchema.TryGetMsFormsType((byte)(site.ClsidCacheIndex ?? 0), out var type);
+        ControlTypeSchema.TryGetMsFormsType((byte)((site.ClsidCacheIndex ?? 0) & 0x00FF), out var type);
 
         if (objectStream != null && site.ObjectStreamSize > 0 && site.ObjectStreamLocalOffset >= 0)
         {
