@@ -129,9 +129,28 @@
                 throw new CliException($"Strict parser mode rejected storage for '{control.Name}': object stream validation is '{validationText}'.");
             }
 
+            if (props.TryGetValue("parser", out var parserValue) &&
+                parserValue is string parserText &&
+                parserText.Equals("heuristic", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': object stream heuristic parser was used.");
+            }
+
+            if (props.TryGetValue("textPropsParser", out var textPropsParserValue) &&
+                textPropsParserValue is string textPropsParserText &&
+                textPropsParserText.Equals("heuristic", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': TextProps heuristic parser was used.");
+            }
+
             if (props.ContainsKey("objectStreamError"))
             {
                 throw new CliException($"Strict parser mode rejected '{control.Name}': object stream error was reported.");
+            }
+
+            foreach (var warningKey in props.Keys.Where(k => k.Contains("Warning", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new CliException($"Strict parser mode rejected '{control.Name}': parser warning '{warningKey}' was reported.");
             }
         }
     }

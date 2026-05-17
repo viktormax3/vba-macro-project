@@ -440,13 +440,15 @@ internal static class ObjectStreamParser
     private static ObjectStreamProperties? TryReadTabStrip(StorageEntryDump stream)
     {
         var data = stream.Data;
-        if (data.Length < 8) return null;
+        if (data.Length < 8 || data[0] != 0x00 || data[1] != 0x02) return null;
 
         int cursor = 0;
-        var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-        cursor += 2;
+        var minorVersion = data[cursor++];
+        var majorVersion = data[cursor++];
         var cbTab = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
         cursor += 2;
+        var declaredEnd = 4 + cbTab;
+        if (cbTab < 4 || declaredEnd > data.Length) return null;
 
         var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
         cursor += 4;
@@ -454,47 +456,61 @@ internal static class ObjectStreamParser
         var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
             ["objectStreamSize"] = stream.Size,
-            ["minorVersion"] = data[0],
-            ["majorVersion"] = data[1],
+            ["minorVersion"] = minorVersion,
+            ["majorVersion"] = majorVersion,
             ["cbTabStrip"] = cbTab,
+            ["tabStripDeclaredEndLocalOffset"] = declaredEnd,
+            ["tabStripDeclaredEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, declaredEnd),
             ["parser"] = "msOFormsTabStrip",
             ["propMask"] = $"0x{propMask:X8}",
         };
 
-        if (MsFormsBinary.HasBit(propMask, 0)) { properties["listIndex"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 1)) properties["backColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        if (MsFormsBinary.HasBit(propMask, 2)) properties["foreColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        if (MsFormsBinary.HasBit(propMask, 5)) { properties["itemsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 6)) { properties["mousePointer"] = data[cursor++]; MsFormsBinary.Align(ref cursor, 4); }
-        if (MsFormsBinary.HasBit(propMask, 8)) { properties["tabOrientation"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 9)) { properties["tabStyle"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
+        uint itemsSize = 0;
+        uint tipStringsSize = 0;
+        uint namesSize = 0;
+        uint tagsSize = 0;
+        uint acceleratorsSize = 0;
+        int tabDataCount = 0;
+
+        // TabStripDataBlock. Important: fNewVersion is a flag-only bit and stores no data.
+        if (MsFormsBinary.HasBit(propMask, 0)) properties["listIndex"] = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "listIndex", properties);
+        if (MsFormsBinary.HasBit(propMask, 1)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 2)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "foreColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 5)) itemsSize = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "itemsSize", properties);
+        if (MsFormsBinary.HasBit(propMask, 6)) properties["mousePointer"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "mousePointer", properties);
+        if (MsFormsBinary.HasBit(propMask, 8)) properties["tabOrientation"] = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "tabOrientation", properties);
+        if (MsFormsBinary.HasBit(propMask, 9)) properties["tabStyle"] = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "tabStyle", properties);
         if (MsFormsBinary.HasBit(propMask, 10)) properties["multiRow"] = true;
-        if (MsFormsBinary.HasBit(propMask, 11)) { properties["tabFixedWidth"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 12)) { properties["tabFixedHeight"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
+        if (MsFormsBinary.HasBit(propMask, 11)) properties["tabFixedWidth"] = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "tabFixedWidth", properties);
+        if (MsFormsBinary.HasBit(propMask, 12)) properties["tabFixedHeight"] = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "tabFixedHeight", properties);
         if (MsFormsBinary.HasBit(propMask, 13)) properties["tooltips"] = true;
-        if (MsFormsBinary.HasBit(propMask, 15)) { properties["tipStringsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 17)) { properties["namesSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
+        if (MsFormsBinary.HasBit(propMask, 15)) tipStringsSize = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "tipStringsSize", properties);
+        if (MsFormsBinary.HasBit(propMask, 17)) namesSize = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "namesSize", properties);
         if (MsFormsBinary.HasBit(propMask, 18))
         {
-            var various = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-            properties["variousPropertyBitsRaw"] = various;
+            var various = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "variousPropertyBitsRaw", properties);
             MsFormsBinary.AddVariousPropertyBits(properties, various);
-            cursor += 4;
         }
-        if (MsFormsBinary.HasBit(propMask, 19)) { properties["tabsAllocated"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 20)) { properties["tagsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 21)) { properties["acceleratorsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 22)) { properties["helpContextIdsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 23)) { properties["mouseIcon"] = 0xFFFF; cursor += 2; MsFormsBinary.Align(ref cursor, 4); }
+        if (MsFormsBinary.HasBit(propMask, 19)) properties["newVersion"] = true;
+        if (MsFormsBinary.HasBit(propMask, 20)) properties["tabsAllocated"] = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "tabsAllocated", properties);
+        if (MsFormsBinary.HasBit(propMask, 21)) tagsSize = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "tagsSize", properties);
+        if (MsFormsBinary.HasBit(propMask, 22)) tabDataCount = ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "tabData", properties);
+        if (MsFormsBinary.HasBit(propMask, 23)) acceleratorsSize = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "acceleratorsSize", properties);
+        if (MsFormsBinary.HasBit(propMask, 24)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "mouseIconMarker", properties);
+        MsFormsBinary.Align(ref cursor, 4);
+        properties["tabStripDataBlockEndLocalOffset"] = cursor;
+        properties["tabStripDataBlockEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
 
         int? width = null;
         int? height = null;
         int? widthOffset = null;
         int? heightOffset = null;
 
-        if (MsFormsBinary.HasBit(propMask, 4)) // fSize
+        // TabStripExtraDataBlock.
+        if (MsFormsBinary.HasBit(propMask, 4)) // fSize, MUST be set.
         {
             MsFormsBinary.Align(ref cursor, 4);
+            if (cursor + 8 > declaredEnd) return null;
             widthOffset = stream.FileOffsets[cursor];
             width = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
             cursor += 4;
@@ -504,15 +520,172 @@ internal static class ObjectStreamParser
             properties["sizeSource"] = "tabStripExtraDataBlock";
         }
 
+        if (!ReadArrayStringBlock(data, stream.FileOffsets, ref cursor, declaredEnd, itemsSize, "tabCaptions", properties)) return null;
+        if (!ReadArrayStringBlock(data, stream.FileOffsets, ref cursor, declaredEnd, tipStringsSize, "tabTooltips", properties)) return null;
+        if (!ReadArrayStringBlock(data, stream.FileOffsets, ref cursor, declaredEnd, namesSize, "tabNames", properties)) return null;
+        if (!ReadArrayStringBlock(data, stream.FileOffsets, ref cursor, declaredEnd, tagsSize, "tabTags", properties)) return null;
+        if (!ReadArrayStringBlock(data, stream.FileOffsets, ref cursor, declaredEnd, acceleratorsSize, "tabAccelerators", properties)) return null;
+
+        properties["tabStripExtraDataEndLocalOffset"] = cursor;
+        properties["tabStripExtraDataEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+        if (cursor != declaredEnd)
+        {
+            properties["tabStripCursorWarning"] = $"Parsed DataBlock/ExtraDataBlock ended at {cursor}, but cbTabStrip declares {declaredEnd}.";
+            cursor = declaredEnd;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 24))
+        {
+            properties["tabStripStreamDataWarning"] = "MouseIcon StreamData is present but GuidAndPicture parsing is not implemented yet.";
+        }
+
         if (cursor < data.Length)
         {
+            properties["textPropsExpectedLocalOffset"] = cursor;
             if (!TextPropsParser.TryRead(data, stream.FileOffsets, cursor, properties, out var textPropsEnd))
             {
                 TextPropsParser.AddHeuristic(data, stream.FileOffsets, properties);
             }
+            else
+            {
+                cursor = textPropsEnd;
+                properties["textPropsEndLocalOffset"] = cursor;
+                properties["textPropsEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+            }
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 22) && tabDataCount > 0)
+        {
+            var tabFlags = new List<Dictionary<string, object?>>(tabDataCount);
+            var tabFlagsStart = cursor;
+            for (var i = 0; i < tabDataCount; i++)
+            {
+                if (cursor + 4 > data.Length)
+                {
+                    properties["tabFlagsWarning"] = $"Could not read TabStripTabFlag {i} at local offset {cursor}.";
+                    break;
+                }
+
+                var flags = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+                tabFlags.Add(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["index"] = i,
+                    ["raw"] = flags,
+                    ["rawHex"] = $"0x{flags:X8}",
+                    ["visible"] = MsFormsBinary.HasBit(flags, 0),
+                    ["enabled"] = MsFormsBinary.HasBit(flags, 1),
+                    ["localOffset"] = cursor,
+                    ["offset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor)
+                });
+                cursor += 4;
+            }
+
+            properties["tabFlags"] = tabFlags;
+            properties["tabFlagsLocalOffset"] = tabFlagsStart;
+            properties["tabFlagsOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, tabFlagsStart);
+            properties["tabFlagsEndLocalOffset"] = cursor;
+            properties["tabFlagsEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
         }
 
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
+    }
+
+    private static int ReadAlignedInt32(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        string property,
+        Dictionary<string, object?> properties)
+    {
+        MsFormsBinary.Align(ref cursor, 4);
+        var value = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+        properties[property] = value;
+        properties[$"{property}LocalOffset"] = cursor;
+        properties[$"{property}Offset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
+        cursor += 4;
+        return value;
+    }
+
+    private static bool ReadArrayStringBlock(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        int declaredEnd,
+        uint size,
+        string property,
+        Dictionary<string, object?> properties)
+    {
+        if (size == 0)
+        {
+            return true;
+        }
+
+        if (size > int.MaxValue || cursor + (int)size > declaredEnd || cursor + (int)size > data.Length)
+        {
+            properties[$"{property}Warning"] = $"Declared array size {size} at local offset {cursor} exceeds TabStrip ExtraDataBlock bounds.";
+            return false;
+        }
+
+        var start = cursor;
+        var end = cursor + (int)size;
+        var values = new List<string>();
+        var entries = new List<Dictionary<string, object?>>();
+        var index = 0;
+
+        while (cursor < end)
+        {
+            if (cursor + 4 > end)
+            {
+                properties[$"{property}Warning"] = $"ArrayString count at local offset {cursor} exceeds declared block end {end}.";
+                cursor = end;
+                break;
+            }
+
+            var countLocalOffset = cursor;
+            var rawCount = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+            var count = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(rawCount);
+            cursor += 4;
+            if (cursor + count.Count > end)
+            {
+                properties[$"{property}Warning"] = $"ArrayString value at local offset {cursor} exceeds declared block end {end}.";
+                cursor = end;
+                break;
+            }
+
+            var valueLocalOffset = cursor;
+            var value = MsFormsBinary.ReadFmString(data, valueLocalOffset, count);
+            values.Add(value);
+            entries.Add(new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["index"] = index,
+                ["value"] = value,
+                ["countRaw"] = rawCount,
+                ["countLocalOffset"] = countLocalOffset,
+                ["countOffset"] = MsFormsBinary.OffsetAt(fileOffsets, countLocalOffset),
+                ["dataLocalOffset"] = valueLocalOffset,
+                ["dataOffset"] = MsFormsBinary.OffsetAt(fileOffsets, valueLocalOffset),
+                ["byteCount"] = count.Count,
+                ["paddedByteCount"] = MsFormsBinary.Align4(count.Count),
+                ["compressed"] = count.Compressed
+            });
+            cursor += MsFormsBinary.Align4(count.Count);
+            index++;
+        }
+
+        if (cursor != end)
+        {
+            properties[$"{property}Warning"] = $"ArrayString block ended at {cursor}, expected {end}.";
+            cursor = end;
+        }
+
+        properties[property] = values;
+        properties[$"{property}Entries"] = entries;
+        properties[$"{property}LocalOffset"] = start;
+        properties[$"{property}Offset"] = MsFormsBinary.OffsetAt(fileOffsets, start);
+        properties[$"{property}ByteCount"] = size;
+        properties[$"{property}EndLocalOffset"] = end;
+        properties[$"{property}EndOffset"] = MsFormsBinary.OffsetAt(fileOffsets, end);
+        return true;
     }
 
     private static ObjectStreamProperties? TryReadMorphData(StorageEntryDump stream, string controlType)

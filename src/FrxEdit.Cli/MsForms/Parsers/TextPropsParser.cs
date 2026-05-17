@@ -131,6 +131,8 @@ internal static class TextPropsParser
 
     public static void AddHeuristic(byte[] data, int[] fileOffsets, Dictionary<string, object?> properties)
     {
+        properties["textPropsParser"] = "heuristic";
+        properties["textPropsWarning"] = "TextProps could not be parsed at the expected offset; font data was recovered heuristically.";
         var textRuns = FindTextRuns(data, minLength: 3);
         var fontRun = FindFontNameRun(data, textRuns);
         if (fontRun is null)
