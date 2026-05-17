@@ -1152,8 +1152,45 @@ internal static class ObjectStreamParser
 
         MsFormsBinary.Align(ref cursor, 4);
 
+        // CommandButtonControl order is:
+        // Header + PropMask/DataBlock/ExtraDataBlock (cbCommandButton)
+        // CommandButtonStreamData (Picture, then MouseIcon when present)
+        // TextProps.
+        // Large picture buttons can have kilobytes of StreamData before TextProps; do not
+        // jump directly from ExtraDataBlock to TextProps or strict mode will correctly fail.
+        var streamDataStart = cursor;
+        if (MsFormsBinary.HasBit(propMask, 7) || MsFormsBinary.HasBit(propMask, 10))
+        {
+            properties["commandButtonStreamDataLocalOffset"] = streamDataStart;
+            properties["commandButtonStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, streamDataStart);
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 7))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "picture", properties))
+            {
+                properties["pictureStreamWarning"] = $"Could not parse CommandButtonStreamData.Picture at local offset {cursor}.";
+            }
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 10))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "mouseIcon", properties))
+            {
+                properties["mouseIconStreamWarning"] = $"Could not parse CommandButtonStreamData.MouseIcon at local offset {cursor}.";
+            }
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 7) || MsFormsBinary.HasBit(propMask, 10))
+        {
+            properties["commandButtonStreamDataEndLocalOffset"] = cursor;
+            properties["commandButtonStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
+        }
+
         if (cursor < data.Length)
         {
+            properties["textPropsExpectedLocalOffset"] = cursor;
+            properties["textPropsExpectedOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
             if (!TextPropsParser.TryRead(data, stream.FileOffsets, cursor, properties, out var textPropsEnd))
             {
                 TextPropsParser.AddHeuristic(data, stream.FileOffsets, properties);
