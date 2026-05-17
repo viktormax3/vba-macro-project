@@ -165,11 +165,23 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             return RebuildStreamMode.ObjectStreamRoundTrip;
         }
 
-        throw new CliException("Option '--stream-mode' must be one of: container, object-roundtrip.");
+        if (value.Equals("object-serialize", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("o-serialize", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("object-fixed", StringComparison.OrdinalIgnoreCase))
+        {
+            return RebuildStreamMode.ObjectStreamSerializeFixed;
+        }
+
+        throw new CliException("Option '--stream-mode' must be one of: container, object-roundtrip, object-serialize.");
     }
 
     private static string FormatRebuildStreamMode(RebuildStreamMode mode) =>
-        mode == RebuildStreamMode.ObjectStreamRoundTrip ? "object-roundtrip" : "container";
+        mode switch
+        {
+            RebuildStreamMode.ObjectStreamRoundTrip => "object-roundtrip",
+            RebuildStreamMode.ObjectStreamSerializeFixed => "object-serialize",
+            _ => "container"
+        };
 
     private int Validate(string[] args)
     {
@@ -246,8 +258,8 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");
-        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip] [--report-out rebuild.report.json]");
-        stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip also reconstructs o streams from parser-identified object slices.");
+        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip|object-serialize] [--report-out rebuild.report.json]");
+        stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip reconstructs o streams from parser-identified object slices; object-serialize rewrites fixed-length known fields through control serializers.");
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");

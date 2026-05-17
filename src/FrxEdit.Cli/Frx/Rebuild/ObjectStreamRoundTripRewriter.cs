@@ -1,6 +1,6 @@
 internal static class ObjectStreamRoundTripRewriter
 {
-    public static CompoundStorageDump RewriteObjectStreams(CompoundStorageDump dump, LayoutInspection layout)
+    public static CompoundStorageDump RewriteObjectStreams(CompoundStorageDump dump, LayoutInspection layout, bool activeSerialize = false)
     {
         var slicesByObjectStreamPath = BuildSlicesByObjectStreamPath(layout);
         if (slicesByObjectStreamPath.Count == 0)
@@ -18,7 +18,7 @@ internal static class ObjectStreamRoundTripRewriter
                 return stream;
             }
 
-            var rewritten = RewriteObjectStream(stream.Path, stream.Data, slices);
+            var rewritten = RewriteObjectStream(stream.Path, stream.Data, slices, activeSerialize);
             return stream with
             {
                 Data = rewritten,
@@ -61,7 +61,7 @@ internal static class ObjectStreamRoundTripRewriter
                 result[objectStreamPath] = slices;
             }
 
-            slices.Add(new ObjectStreamSlice(control.Name, start, size));
+            slices.Add(new ObjectStreamSlice(control, start, size));
         }
 
         foreach (var pair in result)
@@ -72,7 +72,7 @@ internal static class ObjectStreamRoundTripRewriter
         return result;
     }
 
-    private static byte[] RewriteObjectStream(string path, byte[] original, IReadOnlyList<ObjectStreamSlice> slices)
+    private static byte[] RewriteObjectStream(string path, byte[] original, IReadOnlyList<ObjectStreamSlice> slices, bool activeSerialize)
     {
         using var output = new MemoryStream(original.Length);
         var cursor = 0;
@@ -80,12 +80,12 @@ internal static class ObjectStreamRoundTripRewriter
         {
             if (slice.Start < cursor)
             {
-                throw new CliException($"Cannot logical-roundtrip object stream '{path}': slice for '{slice.ControlName}' overlaps a previous slice.");
+                throw new CliException($"Cannot logical-roundtrip object stream '{path}': slice for '{slice.Control.Name}' overlaps a previous slice.");
             }
 
             if (slice.Start + slice.Size > original.Length)
             {
-                throw new CliException($"Cannot logical-roundtrip object stream '{path}': slice for '{slice.ControlName}' exceeds stream length.");
+                throw new CliException($"Cannot logical-roundtrip object stream '{path}': slice for '{slice.Control.Name}' exceeds stream length.");
             }
 
             if (slice.Start > cursor)
@@ -93,10 +93,16 @@ internal static class ObjectStreamRoundTripRewriter
                 output.Write(original, cursor, slice.Start - cursor);
             }
 
-            // Pass 26 is intentionally lossless at the control object level: it reconstructs the
-            // object stream from parser-identified slices while preserving each control payload byte-for-byte.
-            // Future passes will replace this line with control-specific serializers.
-            output.Write(original, slice.Start, slice.Size);
+            var payload = activeSerialize
+                ? ObjectPayloadSerializer.SerializeFixedLength(slice.Control, original.AsSpan(slice.Start, slice.Size))
+                : original.AsSpan(slice.Start, slice.Size).ToArray();
+
+            if (payload.Length != slice.Size)
+            {
+                throw new CliException($"Cannot fixed-length serialize object stream '{path}': serializer for '{slice.Control.Name}' returned {payload.Length} bytes but the site declares {slice.Size} bytes.");
+            }
+
+            output.Write(payload, 0, payload.Length);
             cursor = slice.Start + slice.Size;
         }
 
@@ -156,5 +162,5 @@ internal static class ObjectStreamRoundTripRewriter
         }
     }
 
-    private sealed record ObjectStreamSlice(string ControlName, int Start, int Size);
+    private sealed record ObjectStreamSlice(ControlInfo Control, int Start, int Size);
 }
