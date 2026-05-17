@@ -122,9 +122,9 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 ?? throw new CliException("Patch file is empty.")
             : null;
 
-        if (patch is not null && streamMode != RebuildStreamMode.ObjectStreamPatchProperties)
+        if (patch is not null && streamMode is not (RebuildStreamMode.ObjectStreamPatchProperties or RebuildStreamMode.FormAndObjectPatch))
         {
-            throw new CliException("Option '--patch' requires '--stream-mode object-patch'.");
+            throw new CliException("Option '--patch' requires '--stream-mode object-patch' or '--stream-mode full-patch'.");
         }
 
         var project = UserFormProject.Load(frmPath);
@@ -136,12 +136,12 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         if (patch is not null)
         {
             PatchValidator.Validate(patch, sourceLayout.Controls);
-            RebuildPatchApplier.ValidateObjectPatch(patch);
+            RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch);
         }
 
         var targetLayout = patch is null
             ? sourceLayout
-            : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch);
+            : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch);
 
         var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, streamMode);
 
@@ -206,7 +206,14 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             return RebuildStreamMode.ObjectStreamPatchProperties;
         }
 
-        throw new CliException("Option '--stream-mode' must be one of: container, object-roundtrip, object-serialize, object-normalize, object-patch.");
+        if (value.Equals("full-patch", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("form-patch", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("site-patch", StringComparison.OrdinalIgnoreCase))
+        {
+            return RebuildStreamMode.FormAndObjectPatch;
+        }
+
+        throw new CliException("Option '--stream-mode' must be one of: container, object-roundtrip, object-serialize, object-normalize, object-patch, full-patch.");
     }
 
     private static string FormatRebuildStreamMode(RebuildStreamMode mode) =>
@@ -216,6 +223,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             RebuildStreamMode.ObjectStreamSerializeFixed => "object-serialize",
             RebuildStreamMode.ObjectStreamNormalizeStrings => "object-normalize",
             RebuildStreamMode.ObjectStreamPatchProperties => "object-patch",
+            RebuildStreamMode.FormAndObjectPatch => "full-patch",
             _ => "container"
         };
 

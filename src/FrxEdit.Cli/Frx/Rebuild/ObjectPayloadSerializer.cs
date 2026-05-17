@@ -22,10 +22,12 @@ internal static class ObjectPayloadSerializer
         {
             case "CommandButton":
                 SerializeCommandButton(control, props, output);
+                RewriteControlSize(control, props, output);
                 break;
             case "Label":
                 SerializeTextualControl(control, props, output, ["caption", "fontName"]);
                 RewriteCommonColorsAndFont(props, output);
+                RewriteControlSize(control, props, output);
                 break;
             case "TextBox":
             case "ComboBox":
@@ -36,15 +38,18 @@ internal static class ObjectPayloadSerializer
                 SerializeTextualControl(control, props, output, ["value", "caption", "groupName", "fontName"]);
                 RewriteCommonColorsAndFont(props, output);
                 RewriteUInt32(props, output, "variousPropertyBitsRaw");
+                RewriteControlSize(control, props, output);
                 break;
             case "TabStrip":
                 SerializeTextualControl(control, props, output, ["fontName"]);
                 RewriteCommonColorsAndFont(props, output);
+                RewriteControlSize(control, props, output);
                 break;
             case "Image":
             case "ScrollBar":
             case "SpinButton":
                 RewriteCommonColorsAndFont(props, output);
+                RewriteControlSize(control, props, output);
                 break;
         }
 
@@ -110,6 +115,7 @@ internal static class ObjectPayloadSerializer
                 RewriteUInt16(props, output, "cbCommandButton", 2);
                 RewriteHexUInt32(props, output, "commandButtonPropMask", 4);
                 RewriteCommonColorsAndFont(props, output);
+                RewriteControlSize(control, props, output);
                 break;
             case "TextBox":
             case "ComboBox":
@@ -119,6 +125,7 @@ internal static class ObjectPayloadSerializer
             case "ToggleButton":
                 RewriteCommonColorsAndFont(props, output);
                 RewriteUInt32(props, output, "variousPropertyBitsRaw");
+                RewriteControlSize(control, props, output);
                 break;
             case "Label":
             case "TabStrip":
@@ -126,6 +133,7 @@ internal static class ObjectPayloadSerializer
             case "ScrollBar":
             case "SpinButton":
                 RewriteCommonColorsAndFont(props, output);
+                RewriteControlSize(control, props, output);
                 break;
         }
 
@@ -157,6 +165,32 @@ internal static class ObjectPayloadSerializer
             }
 
             WriteStringSpanFixedLength(control.Name, name, value.ToString() ?? string.Empty, span, output);
+        }
+    }
+
+    private static void RewriteControlSize(ControlInfo control, Dictionary<string, object?> props, byte[] output)
+    {
+        if (!TryGetInt(props, "objectStreamFileOffset", out var objectStreamFileOffset))
+        {
+            return;
+        }
+
+        if (control.RawWidth is int rawWidth && control.WidthOffset is int widthFileOffset)
+        {
+            var localOffset = widthFileOffset - objectStreamFileOffset;
+            if (localOffset >= 0 && localOffset + 4 <= output.Length)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(localOffset, 4), rawWidth);
+            }
+        }
+
+        if (control.RawHeight is int rawHeight && control.HeightOffset is int heightFileOffset)
+        {
+            var localOffset = heightFileOffset - objectStreamFileOffset;
+            if (localOffset >= 0 && localOffset + 4 <= output.Length)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(localOffset, 4), rawHeight);
+            }
         }
     }
 

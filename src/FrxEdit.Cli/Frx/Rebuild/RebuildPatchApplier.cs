@@ -12,36 +12,49 @@ internal static class RebuildPatchApplier
         "borderColor"
     };
 
-    public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch)
+    private static readonly HashSet<string> FormSitePropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        ValidateObjectPatch(patch);
+        "tabIndex"
+    };
 
-        if (patch.Properties is null || patch.Properties.Count == 0)
+    public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false)
+    {
+        ValidateObjectPatch(patch, allowFormSitePatch);
+
+        if ((patch.Properties is null || patch.Properties.Count == 0) &&
+            (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0))
         {
             return source;
         }
 
-        var patchedByName = patch.Properties.ToDictionary(
+        var patchedByName = patch.Properties?.ToDictionary(
             pair => pair.Key,
             pair => pair.Value,
-            StringComparer.OrdinalIgnoreCase);
+            StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
+
+        var layoutByName = allowFormSitePatch
+            ? patch.Layout?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase);
 
         var controls = new List<ControlInfo>(source.Controls.Count);
         foreach (var control in source.Controls)
         {
-            if (!patchedByName.TryGetValue(control.Name, out var requested))
+            patchedByName.TryGetValue(control.Name, out var requested);
+            layoutByName.TryGetValue(control.Name, out var layout);
+
+            if (requested is null && layout is null)
             {
                 controls.Add(control);
                 continue;
             }
 
-            controls.Add(ApplyToControl(control, requested));
+            controls.Add(ApplyToControl(control, requested, layout));
         }
 
         return source with { Controls = controls };
     }
 
-    public static void ValidateObjectPatch(PatchDocument patch)
+    public static void ValidateObjectPatch(PatchDocument patch, bool allowFormSitePatch = false)
     {
         if (patch.Add is { Count: > 0 })
         {
@@ -53,24 +66,25 @@ internal static class RebuildPatchApplier
             throw new CliException("Rebuild object-patch does not support 'renames' yet because control names live in FormSiteData. Use the in-place editor for short renames, or wait for f-stream rebuild.");
         }
 
-        if (patch.Layout is { Count: > 0 })
+        if (patch.Layout is { Count: > 0 } && !allowFormSitePatch)
         {
-            throw new CliException("Rebuild object-patch does not support 'layout' yet. Layout touches FormSiteData positions and object sizes together; use apply for now, or wait for f-stream rebuild.");
+            throw new CliException("Rebuild object-patch does not support 'layout'. Use '--stream-mode full-patch' for rebuild layout edits.");
         }
 
         foreach (var (controlName, properties) in patch.Properties ?? new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase))
         {
             foreach (var propertyName in properties.Keys)
             {
-                if (!ObjectPropertyNames.Contains(propertyName))
+                if (!ObjectPropertyNames.Contains(propertyName) && !(allowFormSitePatch && FormSitePropertyNames.Contains(propertyName)))
                 {
-                    throw new CliException($"Rebuild object-patch cannot write '{controlName}.{propertyName}' yet. Supported object payload properties: {string.Join(", ", ObjectPropertyNames.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))}.");
+                    var supported = ObjectPropertyNames.Concat(allowFormSitePatch ? FormSitePropertyNames : Enumerable.Empty<string>()).OrderBy(x => x, StringComparer.OrdinalIgnoreCase);
+                    throw new CliException($"Rebuild patch cannot write '{controlName}.{propertyName}' yet. Supported properties: {string.Join(", ", supported)}.");
                 }
             }
         }
     }
 
-    private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement> requested)
+    private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout)
     {
         if (control.Properties is null)
         {
@@ -78,7 +92,7 @@ internal static class RebuildPatchApplier
         }
 
         var props = new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
-        foreach (var (propertyName, value) in requested)
+        foreach (var (propertyName, value) in requested ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase))
         {
             switch (propertyName.ToLowerInvariant())
             {
@@ -98,13 +112,48 @@ internal static class RebuildPatchApplier
                     props["fontSize"] = size;
                     props["fontHeightRaw"] = (int)Math.Round(size * 20.0, MidpointRounding.AwayFromZero);
                     break;
+                case "tabindex":
+                    props["tabIndex"] = RequireUInt16(control.Name, propertyName, value);
+                    break;
                 default:
                     throw new CliException($"Property '{propertyName}' is not supported by object-patch.");
             }
         }
 
-        return control with { Properties = props };
+        var left = control.Left;
+        var top = control.Top;
+        var rawWidth = control.RawWidth;
+        var rawHeight = control.RawHeight;
+
+        if (layout is not null)
+        {
+            left = layout.Left ?? ToRawPoints(layout.LeftPt) ?? left;
+            top = layout.Top ?? ToRawPoints(layout.TopPt) ?? top;
+            rawWidth = layout.RawWidth ?? layout.Width ?? ToRawPoints(layout.WidthPt) ?? rawWidth;
+            rawHeight = layout.RawHeight ?? layout.Height ?? ToRawPoints(layout.HeightPt) ?? rawHeight;
+        }
+
+        return control with
+        {
+            Left = left,
+            Top = top,
+            RawWidth = rawWidth,
+            RawHeight = rawHeight,
+            LeftPt = left is int l ? FromRawPoints(l) : control.LeftPt,
+            TopPt = top is int t ? FromRawPoints(t) : control.TopPt,
+            WidthPt = rawWidth is int w ? FromRawPoints(w) : control.WidthPt,
+            HeightPt = rawHeight is int h ? FromRawPoints(h) : control.HeightPt,
+            Properties = props
+        };
     }
+
+    private const double HimetricPerPoint = 2540.0 / 72.0;
+
+    private static int? ToRawPoints(double? points) =>
+        points is null ? null : (int)Math.Round(points.Value * HimetricPerPoint, MidpointRounding.AwayFromZero);
+
+    private static double FromRawPoints(int raw) =>
+        Math.Round(raw / HimetricPerPoint, 2, MidpointRounding.AwayFromZero);
 
     private static string CanonicalPropertyName(string propertyName) =>
         propertyName.ToLowerInvariant() switch
@@ -146,6 +195,16 @@ internal static class RebuildPatchApplier
         }
 
         throw new CliException($"Property '{propertyName}' for '{controlName}' must be a VBA color string like '&H00CCCCCC&' or an unsigned integer.");
+    }
+
+    private static int RequireUInt16(string controlName, string propertyName, JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var parsed) || parsed is < 0 or > ushort.MaxValue)
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must be an integer between 0 and 65535.");
+        }
+
+        return parsed;
     }
 
     private static double RequireFontSize(string controlName, JsonElement value)

@@ -46,6 +46,10 @@ internal static class ObjectStreamRoundTripRewriter
             .GroupBy(update => update.FormStreamPath, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
+        var controlsByFormStreamPath = mode == ObjectStreamRewriteMode.FormAndObjectPatch
+            ? BuildControlsByFormStreamPath(layout)
+            : new Dictionary<string, List<ControlInfo>>(StringComparer.OrdinalIgnoreCase);
+
         var streams = dump.Streams.Select(stream =>
         {
             if (!string.IsNullOrWhiteSpace(stream.Path) && rewrittenObjectStreams.TryGetValue(stream.Path, out var rewrittenObject))
@@ -53,20 +57,110 @@ internal static class ObjectStreamRoundTripRewriter
                 return WithNewData(stream, rewrittenObject);
             }
 
-            if (mode is ObjectStreamRewriteMode.NormalizeStrings or ObjectStreamRewriteMode.PatchProperties &&
+            if (mode is ObjectStreamRewriteMode.NormalizeStrings or ObjectStreamRewriteMode.PatchProperties or ObjectStreamRewriteMode.FormAndObjectPatch &&
                 !string.IsNullOrWhiteSpace(stream.Path) &&
                 stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
-                stream.Name.Equals("f", StringComparison.OrdinalIgnoreCase) &&
-                updatesByFormStreamPath.TryGetValue(stream.Path, out var updates))
+                stream.Name.Equals("f", StringComparison.OrdinalIgnoreCase))
             {
-                var patched = PatchObjectStreamSizes(stream, updates);
-                return WithNewData(stream, patched);
+                var patched = stream.Data;
+                var changed = false;
+
+                if (updatesByFormStreamPath.TryGetValue(stream.Path, out var updates))
+                {
+                    patched = PatchObjectStreamSizes(stream with { Data = patched }, updates);
+                    changed = true;
+                }
+
+                if (mode == ObjectStreamRewriteMode.FormAndObjectPatch &&
+                    controlsByFormStreamPath.TryGetValue(stream.Path, out var controls))
+                {
+                    patched = PatchFormSiteScalars(stream with { Data = patched }, controls);
+                    changed = true;
+                }
+
+                if (changed)
+                {
+                    return WithNewData(stream, patched);
+                }
             }
 
             return stream;
         }).ToList();
 
         return dump with { Streams = streams };
+    }
+
+    private static Dictionary<string, List<ControlInfo>> BuildControlsByFormStreamPath(LayoutInspection layout)
+    {
+        var result = new Dictionary<string, List<ControlInfo>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var control in layout.Controls)
+        {
+            if (control.Properties is null || !TryGetString(control.Properties, "streamPath", out var streamPath) || string.IsNullOrWhiteSpace(streamPath))
+            {
+                continue;
+            }
+
+            if (!result.TryGetValue(streamPath, out var controls))
+            {
+                controls = [];
+                result[streamPath] = controls;
+            }
+
+            controls.Add(control);
+        }
+
+        return result;
+    }
+
+    private static byte[] PatchFormSiteScalars(StorageEntryDump formStream, IReadOnlyList<ControlInfo> controls)
+    {
+        var output = formStream.Data.ToArray();
+        foreach (var control in controls)
+        {
+            if (control.Left is int left && control.LeftOffset is int leftFileOffset)
+            {
+                WriteInt32ByFileOffset(formStream, output, leftFileOffset, left, $"{control.Name}.left");
+            }
+
+            if (control.Top is int top && control.TopOffset is int topFileOffset)
+            {
+                WriteInt32ByFileOffset(formStream, output, topFileOffset, top, $"{control.Name}.top");
+            }
+
+            if (control.Properties is not null &&
+                TryGetInt(control.Properties, "tabIndex", out var tabIndex) &&
+                TryGetInt(control.Properties, "tabIndexOffset", out var tabIndexFileOffset))
+            {
+                WriteUInt16ByFileOffset(formStream, output, tabIndexFileOffset, tabIndex, $"{control.Name}.tabIndex");
+            }
+        }
+
+        return output;
+    }
+
+    private static void WriteInt32ByFileOffset(StorageEntryDump stream, byte[] output, int fileOffset, int value, string context)
+    {
+        if (!TryMapFileOffsetToLocal(stream.FileOffsets, fileOffset, out var localOffset) || localOffset < 0 || localOffset + 4 > output.Length)
+        {
+            throw new CliException($"Cannot patch {context} in '{stream.Path}': file offset {fileOffset} is not part of the form stream.");
+        }
+
+        BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(localOffset, 4), value);
+    }
+
+    private static void WriteUInt16ByFileOffset(StorageEntryDump stream, byte[] output, int fileOffset, int value, string context)
+    {
+        if (value is < 0 or > ushort.MaxValue)
+        {
+            throw new CliException($"Cannot patch {context}: value {value} is outside UInt16 range.");
+        }
+
+        if (!TryMapFileOffsetToLocal(stream.FileOffsets, fileOffset, out var localOffset) || localOffset < 0 || localOffset + 2 > output.Length)
+        {
+            throw new CliException($"Cannot patch {context} in '{stream.Path}': file offset {fileOffset} is not part of the form stream.");
+        }
+
+        BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(localOffset, 2), unchecked((ushort)value));
     }
 
     private static StorageEntryDump WithNewData(StorageEntryDump stream, byte[] data) =>
@@ -194,7 +288,7 @@ internal static class ObjectStreamRoundTripRewriter
             {
                 ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(slice.Control, originalPayload),
                 ObjectStreamRewriteMode.NormalizeStrings => ObjectPayloadSerializer.SerializeNormalizedStrings(slice.Control, originalPayload),
-                ObjectStreamRewriteMode.PatchProperties => ObjectPayloadSerializer.SerializePatchedProperties(slice.Control, originalPayload),
+                ObjectStreamRewriteMode.PatchProperties or ObjectStreamRewriteMode.FormAndObjectPatch => ObjectPayloadSerializer.SerializePatchedProperties(slice.Control, originalPayload),
                 _ => originalPayload.ToArray()
             };
 
@@ -203,7 +297,7 @@ internal static class ObjectStreamRoundTripRewriter
                 throw new CliException($"Cannot fixed-length serialize object stream '{path}': serializer for '{slice.Control.Name}' returned {payload.Length} bytes but the site declares {slice.Size} bytes.");
             }
 
-            if (mode is ObjectStreamRewriteMode.NormalizeStrings or ObjectStreamRewriteMode.PatchProperties && payload.Length != slice.Size)
+            if (mode is ObjectStreamRewriteMode.NormalizeStrings or ObjectStreamRewriteMode.PatchProperties or ObjectStreamRewriteMode.FormAndObjectPatch && payload.Length != slice.Size)
             {
                 AddSizeUpdate(slice.Control, payload.Length, sizeUpdates);
             }
@@ -311,5 +405,6 @@ internal enum ObjectStreamRewriteMode
     RoundTrip,
     ActiveSerializeFixed,
     NormalizeStrings,
-    PatchProperties
+    PatchProperties,
+    FormAndObjectPatch
 }
