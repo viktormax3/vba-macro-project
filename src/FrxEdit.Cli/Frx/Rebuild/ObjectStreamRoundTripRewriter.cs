@@ -8,6 +8,11 @@ internal static class ObjectStreamRoundTripRewriter
         var slicesByObjectStreamPath = BuildSlicesByObjectStreamPath(layout);
         if (slicesByObjectStreamPath.Count == 0)
         {
+            if (mode != ObjectStreamRewriteMode.RoundTrip && LayoutHasObjectPayloads(layout))
+            {
+                throw new CliException($"Object stream rebuild mode '{mode}' found no object slices even though the parsed layout contains object payload metadata. This usually means a numeric metadata type was not recognized by TryGetInt.");
+            }
+
             return dump;
         }
 
@@ -29,6 +34,11 @@ internal static class ObjectStreamRoundTripRewriter
 
         if (rewrittenObjectStreams.Count == 0)
         {
+            if (mode != ObjectStreamRewriteMode.RoundTrip)
+            {
+                throw new CliException($"Object stream rebuild mode '{mode}' found object slices but did not rewrite any 'o' streams. Check storagePath/object stream path matching.");
+            }
+
             return dump;
         }
 
@@ -43,7 +53,7 @@ internal static class ObjectStreamRoundTripRewriter
                 return WithNewData(stream, rewrittenObject);
             }
 
-            if (mode == ObjectStreamRewriteMode.NormalizeStrings &&
+            if (mode is ObjectStreamRewriteMode.NormalizeStrings or ObjectStreamRewriteMode.PatchProperties &&
                 !string.IsNullOrWhiteSpace(stream.Path) &&
                 stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
                 stream.Name.Equals("f", StringComparison.OrdinalIgnoreCase) &&
@@ -103,6 +113,14 @@ internal static class ObjectStreamRoundTripRewriter
         localOffset = -1;
         return false;
     }
+
+
+    private static bool LayoutHasObjectPayloads(LayoutInspection layout) =>
+        layout.Controls.Any(control => control.Properties is not null &&
+            TryGetString(control.Properties, "storagePath", out _) &&
+            TryGetInt(control.Properties, "objectStreamLocalOffset", out _) &&
+            TryGetInt(control.Properties, "objectStreamSize", out var size) &&
+            size > 0);
 
     private static Dictionary<string, List<ObjectStreamSlice>> BuildSlicesByObjectStreamPath(LayoutInspection layout)
     {
@@ -176,6 +194,7 @@ internal static class ObjectStreamRoundTripRewriter
             {
                 ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(slice.Control, originalPayload),
                 ObjectStreamRewriteMode.NormalizeStrings => ObjectPayloadSerializer.SerializeNormalizedStrings(slice.Control, originalPayload),
+                ObjectStreamRewriteMode.PatchProperties => ObjectPayloadSerializer.SerializePatchedProperties(slice.Control, originalPayload),
                 _ => originalPayload.ToArray()
             };
 
@@ -184,7 +203,7 @@ internal static class ObjectStreamRoundTripRewriter
                 throw new CliException($"Cannot fixed-length serialize object stream '{path}': serializer for '{slice.Control.Name}' returned {payload.Length} bytes but the site declares {slice.Size} bytes.");
             }
 
-            if (mode == ObjectStreamRewriteMode.NormalizeStrings && payload.Length != slice.Size)
+            if (mode is ObjectStreamRewriteMode.NormalizeStrings or ObjectStreamRewriteMode.PatchProperties && payload.Length != slice.Size)
             {
                 AddSizeUpdate(slice.Control, payload.Length, sizeUpdates);
             }
@@ -251,10 +270,31 @@ internal static class ObjectStreamRoundTripRewriter
             case uint u when u <= int.MaxValue:
                 value = (int)u;
                 return true;
+            case ulong ul when ul <= int.MaxValue:
+                value = (int)ul;
+                return true;
+            case short s:
+                value = s;
+                return true;
+            case ushort us:
+                value = us;
+                return true;
+            case byte b:
+                value = b;
+                return true;
+            case sbyte sb:
+                value = sb;
+                return true;
             case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var parsed):
                 value = parsed;
                 return true;
-            case string text when int.TryParse(text, out var parsed):
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out var parsed64) && parsed64 >= int.MinValue && parsed64 <= int.MaxValue:
+                value = (int)parsed64;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetUInt64(out var parsedU64) && parsedU64 <= int.MaxValue:
+                value = (int)parsedU64;
+                return true;
+            case string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed):
                 value = parsed;
                 return true;
             default:
@@ -270,5 +310,6 @@ internal enum ObjectStreamRewriteMode
 {
     RoundTrip,
     ActiveSerializeFixed,
-    NormalizeStrings
+    NormalizeStrings,
+    PatchProperties
 }

@@ -53,14 +53,18 @@ internal static class ObjectPayloadSerializer
 
 
 
-    public static byte[] SerializeNormalizedStrings(ControlInfo control, ReadOnlySpan<byte> original)
+    public static byte[] SerializeNormalizedStrings(ControlInfo control, ReadOnlySpan<byte> original) =>
+        SerializeVariableStrings(control, original, allowGrowth: false);
+
+    public static byte[] SerializePatchedProperties(ControlInfo control, ReadOnlySpan<byte> original) =>
+        SerializeVariableStrings(control, original, allowGrowth: true);
+
+    private static byte[] SerializeVariableStrings(ControlInfo control, ReadOnlySpan<byte> original, bool allowGrowth)
     {
-        // Variable-length preparation pass.  First rewrite known fixed fields exactly as pass 27
-        // does, then compact counted strings whose decoded value is shorter than the counted
-        // allocation currently present in the stream.  This removes the null-padding used by the
-        // safe in-place editor and proves that object payload sizes can change while FormSiteData
-        // ObjectStreamSize is updated by the caller.
-        var output = SerializeFixedLength(control, original);
+        // Variable-length pass. First rewrite fixed fields, then rebuild counted strings in reverse
+        // offset order.  In normalize mode strings may only compact or keep size; in object-patch
+        // mode they may also grow, and the caller updates FormSiteData.ObjectStreamSize.
+        var output = allowGrowth ? SerializeFixedFieldsOnly(control, original) : SerializeFixedLength(control, original);
         var props = control.Properties;
         if (props is null)
         {
@@ -77,7 +81,52 @@ internal static class ObjectPayloadSerializer
             .OrderByDescending(segment => segment.Span.DataLocalOffset)
             .ThenByDescending(segment => segment.Span.CountLocalOffset ?? -1))
         {
-            output = NormalizeStringSegment(control.Name, segment, output);
+            output = NormalizeStringSegment(control.Name, segment, output, allowGrowth);
+        }
+
+        return output;
+    }
+
+
+    private static byte[] SerializeFixedFieldsOnly(ControlInfo control, ReadOnlySpan<byte> original)
+    {
+        var output = original.ToArray();
+        var props = control.Properties;
+        if (props is null)
+        {
+            return output;
+        }
+
+        if (!TryGetString(props, "parser", out var parser) || parser.Equals("heuristic", StringComparison.OrdinalIgnoreCase))
+        {
+            return output;
+        }
+
+        switch (control.Type)
+        {
+            case "CommandButton":
+                RewriteByte(props, output, "minorVersion", 0);
+                RewriteByte(props, output, "majorVersion", 1);
+                RewriteUInt16(props, output, "cbCommandButton", 2);
+                RewriteHexUInt32(props, output, "commandButtonPropMask", 4);
+                RewriteCommonColorsAndFont(props, output);
+                break;
+            case "TextBox":
+            case "ComboBox":
+            case "ListBox":
+            case "CheckBox":
+            case "OptionButton":
+            case "ToggleButton":
+                RewriteCommonColorsAndFont(props, output);
+                RewriteUInt32(props, output, "variousPropertyBitsRaw");
+                break;
+            case "Label":
+            case "TabStrip":
+            case "Image":
+            case "ScrollBar":
+            case "SpinButton":
+                RewriteCommonColorsAndFont(props, output);
+                break;
         }
 
         return output;
@@ -293,7 +342,7 @@ internal static class ObjectPayloadSerializer
         return result;
     }
 
-    private static byte[] NormalizeStringSegment(string controlName, StringSegment segment, byte[] payload)
+    private static byte[] NormalizeStringSegment(string controlName, StringSegment segment, byte[] payload, bool allowGrowth)
     {
         var span = segment.Span;
         if (span.CountLocalOffset is not int countLocalOffset)
@@ -323,9 +372,9 @@ internal static class ObjectPayloadSerializer
         }
 
         var newPaddedByteCount = Align4(encoded.Length);
-        if (newPaddedByteCount > span.PaddedByteCount)
+        if (!allowGrowth && newPaddedByteCount > span.PaddedByteCount)
         {
-            throw new CliException($"Cannot normalize {controlName}.{segment.PropertyName}: decoded value needs {encoded.Length} bytes, exceeding current padded allocation {span.PaddedByteCount}. Full model mutation will be supported by a later serializer pass.");
+            throw new CliException($"Cannot normalize {controlName}.{segment.PropertyName}: decoded value needs {encoded.Length} bytes, exceeding current padded allocation {span.PaddedByteCount}. Use object-patch mode for full variable-length mutations.");
         }
 
         // No structural change needed; still write the real count and clear padding so the payload
@@ -437,14 +486,29 @@ internal static class ObjectPayloadSerializer
             case uint u when u <= int.MaxValue:
                 value = (int)u;
                 return true;
+            case ulong ul when ul <= int.MaxValue:
+                value = (int)ul;
+                return true;
+            case short s:
+                value = s;
+                return true;
             case ushort us:
                 value = us;
                 return true;
             case byte b:
                 value = b;
                 return true;
+            case sbyte sb:
+                value = sb;
+                return true;
             case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var parsed):
                 value = parsed;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out var parsed64) && parsed64 >= int.MinValue && parsed64 <= int.MaxValue:
+                value = (int)parsed64;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetUInt64(out var parsedU64) && parsedU64 <= int.MaxValue:
+                value = (int)parsedU64;
                 return true;
             case string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed):
                 value = parsed;

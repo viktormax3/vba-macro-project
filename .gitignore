@@ -1,5 +1,6 @@
 **/bin/
 **/obj/
+**/out/
 
 # FRX parser diagnostics and generated experiment outputs.
 all_controls_layout_*.json

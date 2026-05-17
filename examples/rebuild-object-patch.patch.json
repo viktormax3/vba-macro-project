@@ -1,0 +1,14 @@
+{
+  "properties": {
+    "CommandButton2": {
+      "caption": "Extraer documentos seleccionados",
+      "fontSize": 9.5,
+      "backColor": "&H00404040&",
+      "foreColor": "&H00FFFFFF&"
+    },
+    "CheckBox3": {
+      "caption": "Linea de corte extendida desde rebuild",
+      "value": "1"
+    }
+  }
+}
