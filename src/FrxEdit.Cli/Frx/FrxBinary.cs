@@ -737,7 +737,10 @@ internal sealed class FrxBinary
             ["recordTypeCode"] = $"0x{record.Marker.TypeCode:X2}",
         };
         properties.TryAdd("parser", "structuredStorageFStream");
-        AddFStreamTextProperties(properties, record);
+        // Do not scan bytes between structured SiteExtraDataBlock fields as textual properties.
+        // In MS-OFORMS, tag/controlTipText are present only when their SitePropMask bits
+        // are set and are already populated by StructuredMsFormsParser. Padding bytes must
+        // be ignored; scanning them can surface stale garbage as phantom tags.
 
         return new ControlInfo(
             record.Name,
