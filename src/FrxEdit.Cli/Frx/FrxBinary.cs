@@ -129,6 +129,21 @@
                 throw new CliException($"Strict parser mode rejected storage for '{control.Name}': object stream validation is '{validationText}'.");
             }
 
+            if (control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!props.ContainsKey("multiPageXParser"))
+                {
+                    throw new CliException($"Strict parser mode rejected '{control.Name}': MultiPage x stream metadata was not parsed.");
+                }
+
+                if (props.TryGetValue("multiPageXStreamValidation", out var xValidation) &&
+                    xValidation is string xValidationText &&
+                    !xValidationText.Equals("exact", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new CliException($"Strict parser mode rejected '{control.Name}': MultiPage x stream validation is '{xValidationText}'.");
+                }
+            }
+
             if (props.TryGetValue("parser", out var parserValue) &&
                 parserValue is string parserText &&
                 parserText.Equals("heuristic", StringComparison.OrdinalIgnoreCase))
@@ -310,11 +325,94 @@
             }
         }
 
+        ApplyMultiPageXStreams(controls, storage.Streams, controlsBySiteId);
+
         return controls.Values.ToList();
     }
 
     private static int PathDepth(string? path) =>
         string.IsNullOrEmpty(path) ? 0 : path.Count(ch => ch == '/');
+
+
+    private static void ApplyMultiPageXStreams(
+        Dictionary<int, ControlInfo> controls,
+        IReadOnlyList<StorageEntryDump> streams,
+        IReadOnlyDictionary<uint, string> controlsBySiteId)
+    {
+        var byName = controls.ToDictionary(pair => pair.Value.Name, pair => pair.Key, StringComparer.OrdinalIgnoreCase);
+        foreach (var xStream in streams.Where(s => s.Kind == "Stream" && s.Name == "x"))
+        {
+            var owner = ResolveStreamOwner(xStream, controlsBySiteId);
+            if (owner is null || !byName.TryGetValue(owner, out var ownerKey))
+            {
+                continue;
+            }
+
+            if (!MultiPageXStreamParser.TryRead(xStream, out var xProperties))
+            {
+                controls[ownerKey] = MergeProperties(controls[ownerKey], new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["multiPageXWarning"] = $"Could not parse MultiPage x stream '{xStream.Path ?? xStream.Name}'.",
+                    ["multiPageXStreamPath"] = xStream.Path,
+                    ["multiPageXStreamLength"] = xStream.Data.Length
+                });
+                continue;
+            }
+
+            var ownerProperties = new Dictionary<string, object?>(xProperties.MultiPageProperties, StringComparer.OrdinalIgnoreCase)
+            {
+                ["multiPageXParser"] = "msOFormsMultiPageXStream",
+                ["multiPageXStreamPath"] = xStream.Path,
+                ["multiPageXStreamIndex"] = xStream.Index,
+                ["pagePropertiesCount"] = xProperties.PageProperties.Count,
+                ["pageProperties"] = xProperties.PageProperties
+            };
+            controls[ownerKey] = MergeProperties(controls[ownerKey], ownerProperties);
+
+            for (var i = 0; i < xProperties.PageIds.Count; i++)
+            {
+                var pageId = xProperties.PageIds[i];
+                if (!controlsBySiteId.TryGetValue(pageId, out var pageName) || !byName.TryGetValue(pageName, out var pageKey))
+                {
+                    continue;
+                }
+
+                var pagePropertiesIndex = i + 1; // PageProperties[0] is explicitly ignored by MS-OFORMS.
+                var pageProperties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["multiPageParent"] = owner,
+                    ["multiPagePageIndex"] = i,
+                    ["multiPagePageId"] = pageId,
+                    ["multiPageXStreamPath"] = xStream.Path,
+                    ["pagePropertiesIndex"] = pagePropertiesIndex
+                };
+
+                if (pagePropertiesIndex < xProperties.PageProperties.Count)
+                {
+                    foreach (var (name, value) in xProperties.PageProperties[pagePropertiesIndex])
+                    {
+                        pageProperties[$"pageProperties{name[0].ToString().ToUpperInvariant()}{name[1..]}"] = value;
+                    }
+                }
+
+                controls[pageKey] = MergeProperties(controls[pageKey], pageProperties);
+            }
+        }
+    }
+
+    private static ControlInfo MergeProperties(ControlInfo control, IReadOnlyDictionary<string, object?> propertiesToAdd)
+    {
+        var properties = control.Properties is null
+            ? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in propertiesToAdd)
+        {
+            properties[name] = value;
+        }
+
+        return control with { Properties = properties };
+    }
 
     private static bool IsRootStoragePath(string path) =>
         path.Equals("Root Entry", StringComparison.OrdinalIgnoreCase) ||
