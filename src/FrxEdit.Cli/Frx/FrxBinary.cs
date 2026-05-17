@@ -1144,6 +1144,14 @@ internal sealed class FrxBinary
             throw new CliException($"Invalid control name '{newName}'.");
         }
 
+        var properties = control.Properties ?? throw new CliException($"Control '{control.Name}' has no property metadata.");
+        if (TryGetStringSpan(properties, "name", out var span))
+        {
+            WriteStringSpan(control.Name, "name", newName, span);
+            return;
+        }
+
+        // Legacy fallback for old scans without SiteExtraDataBlock metadata.
         var oldBytes = Encoding.ASCII.GetBytes(control.BinaryName ?? control.Name);
         var newBytes = Encoding.ASCII.GetBytes(newName);
         if (newBytes.Length > oldBytes.Length)
@@ -1215,6 +1223,8 @@ internal sealed class FrxBinary
             switch (property.ToLowerInvariant())
             {
                 case "caption":
+                case "value":
+                case "groupname":
                     WriteStringProperty(control, property, value, preservePrintableSuffix: false);
                     break;
                 case "tag":
@@ -1302,7 +1312,7 @@ internal sealed class FrxBinary
             throw new CliException($"Property 'tabIndex' for '{control.Name}' must be an integer from 0 to 255.");
         }
 
-        Bytes[markerOffset] = (byte)tabIndex;
+        BinaryPrimitives.WriteUInt16LittleEndian(Bytes.AsSpan(markerOffset, 2), (ushort)tabIndex);
     }
 
 
@@ -1407,7 +1417,7 @@ internal sealed class FrxBinary
 
     private static int GetRequiredIntProperty(Dictionary<string, object?> properties, string property, string controlName)
     {
-        if (properties.TryGetValue(property, out var value) && value is int offset)
+        if (TryReadInt(properties, property, out var offset))
         {
             return offset;
         }

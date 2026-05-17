@@ -1,4 +1,4 @@
-﻿internal static class VbaRenamer
+internal static class VbaRenamer
 {
     public static string Apply(string source, Dictionary<string, string>? renames)
     {
@@ -10,7 +10,7 @@
         var result = source;
         foreach (var (oldName, newName) in renames)
         {
-            result = Regex.Replace(result, $@"(?<![A-Za-z0-9_]){Regex.Escape(oldName)}(?![A-Za-z0-9])", newName);
+            result = Regex.Replace(result, $@"(?<![A-Za-z0-9_]){Regex.Escape(oldName)}(?![A-Za-z0-9_])", newName);
         }
 
         return result;
