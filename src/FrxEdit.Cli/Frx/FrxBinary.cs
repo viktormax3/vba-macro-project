@@ -1,4 +1,4 @@
-﻿internal sealed class FrxBinary
+internal sealed class FrxBinary
 {
     private const double FrxUnitsPerPoint = 2540.0 / 72.0;
     private const int RecordBlockGapThreshold = 512;
@@ -68,14 +68,14 @@
             return InspectByNameScan(knownControlNames, controlScopes);
         }
 
-        var structured = InspectStructuredStorage(knownControlNames, controlScopes, parserMode);
+        var structured = InspectStructuredStorage(knownControlNames, controlScopes, parserMode, out var frxFormControl);
         if (structured.Count > 0)
         {
             var orderedStructured = structured.OrderBy(c => c.NameOffset).ToList();
             var annotatedStructured = AnnotateRecordOrder(orderedStructured);
             var controls = AddContainerDimensions(annotatedStructured);
-            ValidateParserMode(parserMode, controls);
-            return new LayoutInspection(controls);
+            ValidateParserMode(parserMode, controls, frxFormControl);
+            return new LayoutInspection(controls, frxFormControl, BuildParserValidationReport(controls, frxFormControl));
         }
 
         if (parserMode == ParserMode.Strict)
@@ -86,11 +86,24 @@
         return InspectByNameScan(knownControlNames, controlScopes);
     }
 
-    private static void ValidateParserMode(ParserMode parserMode, IReadOnlyList<ControlInfo> controls)
+    private static void ValidateParserMode(
+        ParserMode parserMode,
+        IReadOnlyList<ControlInfo> controls,
+        IReadOnlyDictionary<string, object?>? frxFormControl)
     {
         if (parserMode != ParserMode.Strict)
         {
             return;
+        }
+
+        if (frxFormControl is null || !frxFormControl.ContainsKey("formControlParser"))
+        {
+            throw new CliException("Strict parser mode rejected the FRX: root FormControl metadata was not parsed.");
+        }
+
+        foreach (var rootWarningKey in frxFormControl.Keys.Where(k => k.Contains("Warning", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new CliException($"Strict parser mode rejected the root FormControl: parser warning '{rootWarningKey}' was reported.");
         }
 
         foreach (var control in controls)
@@ -189,7 +202,8 @@
 
         var ordered = controls.Values.OrderBy(c => c.NameOffset).ToList();
         var annotated = AnnotateRecordOrder(ordered);
-        return new LayoutInspection(AddContainerDimensions(annotated));
+        var finalControls = AddContainerDimensions(annotated);
+        return new LayoutInspection(finalControls, null, BuildParserValidationReport(finalControls, null));
 
         void AddControlMatch(Match match, bool requireKnownType)
         {
@@ -246,8 +260,10 @@
     private IReadOnlyList<ControlInfo> InspectStructuredStorage(
         IReadOnlySet<string>? knownControlNames,
         IReadOnlyDictionary<string, string>? controlScopes,
-        ParserMode parserMode)
+        ParserMode parserMode,
+        out Dictionary<string, object?>? rootFormControl)
     {
+        rootFormControl = null;
         CompoundStorageDump storage;
         try
         {
@@ -281,9 +297,16 @@
                 streamOwner = pendingContainerOwners.Dequeue();
             }
 
-            if (streamOwner is not null && FormControlParser.TryRead(stream, out var formControlProperties))
+            if (FormControlParser.TryRead(stream, out var formControlProperties))
             {
-                formControlByOwner[streamOwner] = formControlProperties;
+                if (streamOwner is not null)
+                {
+                    formControlByOwner[streamOwner] = formControlProperties;
+                }
+                else if (IsRootStoragePath(stream.ParentPath ?? string.Empty))
+                {
+                    rootFormControl = BuildRootFormControlProperties(stream, formControlProperties);
+                }
             }
 
             var pairedOStream = FindPairedObjectStream(storage.Streams, stream);
@@ -332,6 +355,197 @@
 
     private static int PathDepth(string? path) =>
         string.IsNullOrEmpty(path) ? 0 : path.Count(ch => ch == '/');
+
+    private static Dictionary<string, object?> BuildRootFormControlProperties(
+        StorageEntryDump stream,
+        FormControlProperties formControl)
+    {
+        var properties = new Dictionary<string, object?>(formControl.Properties, StringComparer.OrdinalIgnoreCase)
+        {
+            ["formControlScope"] = "root",
+            ["storagePath"] = stream.ParentPath,
+            ["streamPath"] = stream.Path,
+            ["streamName"] = stream.Name,
+            ["streamIndex"] = stream.Index,
+            ["streamLength"] = stream.Data.Length,
+        };
+
+        if (formControl.DisplayedWidth is not null)
+        {
+            properties["displayedWidthPt"] = ToPoints(formControl.DisplayedWidth);
+        }
+
+        if (formControl.DisplayedHeight is not null)
+        {
+            properties["displayedHeightPt"] = ToPoints(formControl.DisplayedHeight);
+        }
+
+        if (formControl.LogicalWidth is not null)
+        {
+            properties["logicalWidthPt"] = ToPoints(formControl.LogicalWidth);
+        }
+
+        if (formControl.LogicalHeight is not null)
+        {
+            properties["logicalHeightPt"] = ToPoints(formControl.LogicalHeight);
+        }
+
+        return properties;
+    }
+
+    private static Dictionary<string, object?> BuildParserValidationReport(
+        IReadOnlyList<ControlInfo> controls,
+        IReadOnlyDictionary<string, object?>? frxFormControl)
+    {
+        var parserCounts = controls
+            .GroupBy(c => TryGetPropertyString(c.Properties, "parser") ?? "unknown", StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (object?)g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        var typeCounts = controls
+            .GroupBy(c => c.Type, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (object?)g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        var objectStreamValidations = controls
+            .Where(c => c.Properties?.ContainsKey("objectStreamSizeValidation") == true)
+            .GroupBy(c => TryGetPropertyString(c.Properties, "storagePath") ?? c.Parent ?? "Root Entry", StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => (object?)new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["validation"] = TryGetPropertyString(g.First().Properties, "objectStreamSizeValidation"),
+                    ["consumedBytes"] = TryGetPropertyObject(g.First().Properties, "objectStreamConsumedBytes"),
+                    ["length"] = TryGetPropertyObject(g.First().Properties, "objectStreamLength"),
+                },
+                StringComparer.OrdinalIgnoreCase);
+
+        var multiPageValidations = controls
+            .Where(c => c.Properties?.ContainsKey("multiPageXStreamValidation") == true)
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                c => c.Name,
+                c => (object?)new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["validation"] = TryGetPropertyString(c.Properties, "multiPageXStreamValidation"),
+                    ["pageCount"] = TryGetPropertyObject(c.Properties, "multiPagePageCount"),
+                    ["pageIds"] = TryGetPropertyObject(c.Properties, "multiPagePageIds"),
+                },
+                StringComparer.OrdinalIgnoreCase);
+
+        var missing = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["nameOrType"] = controls.Count(c => string.IsNullOrWhiteSpace(c.Name) || string.IsNullOrWhiteSpace(c.Type) || c.Type.Equals("Unknown", StringComparison.OrdinalIgnoreCase)),
+            ["position"] = controls.Count(c => c.Left is null || c.Top is null),
+            ["size"] = controls.Count(c => c.RawWidth is null || c.RawHeight is null),
+            ["stringSpanForEditableStrings"] = CountMissingStringSpans(controls),
+        };
+
+        var warningKeys = controls
+            .SelectMany(c => c.Properties?.Keys
+                .Where(k => k.Contains("Warning", StringComparison.OrdinalIgnoreCase))
+                .Select(k => $"{c.Name}.{k}") ?? Enumerable.Empty<string>())
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .Cast<object?>()
+            .ToList();
+
+        var errorKeys = controls
+            .SelectMany(c => c.Properties?.Keys
+                .Where(k => k.Contains("Error", StringComparison.OrdinalIgnoreCase))
+                .Select(k => $"{c.Name}.{k}") ?? Enumerable.Empty<string>())
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .Cast<object?>()
+            .ToList();
+
+        var heuristicControls = controls
+            .Where(c => string.Equals(TryGetPropertyString(c.Properties, "parser"), "heuristic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(TryGetPropertyString(c.Properties, "textPropsParser"), "heuristic", StringComparison.OrdinalIgnoreCase))
+            .Select(c => (object?)c.Name)
+            .OrderBy(name => name)
+            .ToList();
+
+        var notObserved = new List<object?>();
+        if (!controls.Any(c => c.Properties?.ContainsKey("classTableIndex") == true))
+        {
+            notObserved.Add("ClassTable / ClsidCacheIndex >= 0x8000");
+        }
+        if (!controls.Any(c => c.Properties?.ContainsKey("columnInfo") == true))
+        {
+            notObserved.Add("MorphDataColumnInfo / non-default ComboBox-ListBox columns");
+        }
+        if (!controls.Any(c => c.Properties?.ContainsKey("pagePropertiesCaption") == true || c.Properties?.ContainsKey("pagePropertiesName") == true))
+        {
+            notObserved.Add("PageProperties with non-default page metadata");
+        }
+        if (!controls.Any(c => c.Properties?.ContainsKey("mouseIconClsid") == true || c.Properties?.ContainsKey("mouseIconDataOffset") == true))
+        {
+            notObserved.Add("MouseIcon StreamData");
+        }
+
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["parserValidationVersion"] = 1,
+            ["rootFormControlParsed"] = frxFormControl is not null,
+            ["controlCount"] = controls.Count,
+            ["legacyScannerCount"] = controls.Count(c => c.Properties?.ContainsKey("legacyScanner") == true),
+            ["warningCount"] = warningKeys.Count,
+            ["errorCount"] = errorKeys.Count,
+            ["heuristicCount"] = heuristicControls.Count,
+            ["missing"] = missing,
+            ["parserCounts"] = parserCounts,
+            ["typeCounts"] = typeCounts,
+            ["objectStreamValidations"] = objectStreamValidations,
+            ["multiPageXStreamValidations"] = multiPageValidations,
+            ["heuristicControls"] = heuristicControls,
+            ["warnings"] = warningKeys,
+            ["errors"] = errorKeys,
+            ["notObservedDocumentationBranches"] = notObserved,
+        };
+    }
+
+    private static int CountMissingStringSpans(IReadOnlyList<ControlInfo> controls)
+    {
+        var editableStringNames = new[] { "caption", "value", "tag", "controlTipText", "fontName", "name", "formCaption" };
+        var missing = 0;
+        foreach (var control in controls)
+        {
+            if (control.Properties is null)
+            {
+                continue;
+            }
+
+            foreach (var propertyName in editableStringNames)
+            {
+                if (control.Properties.ContainsKey(propertyName) &&
+                    !control.Properties.ContainsKey($"{propertyName}Span") &&
+                    !control.Properties.ContainsKey($"{propertyName}Offset"))
+                {
+                    missing++;
+                }
+            }
+        }
+
+        return missing;
+    }
+
+    private static string? TryGetPropertyString(Dictionary<string, object?>? properties, string name)
+    {
+        if (properties is null || !properties.TryGetValue(name, out var value))
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            string s => s,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+            _ => value?.ToString(),
+        };
+    }
+
+    private static object? TryGetPropertyObject(Dictionary<string, object?>? properties, string name) =>
+        properties is not null && properties.TryGetValue(name, out var value) ? value : null;
 
 
     private static void ApplyMultiPageXStreams(

@@ -2,7 +2,9 @@ internal sealed record LayoutDocument(
     string FormName,
     string FrxFile,
     Dictionary<string, object?> FormProperties,
-    IReadOnlyList<ControlInfo> Controls);
+    IReadOnlyList<ControlInfo> Controls,
+    Dictionary<string, object?>? FrxFormControl = null,
+    Dictionary<string, object?>? ParserValidation = null);
 
 internal sealed record HumanLayoutDocument(
     string FormName,
@@ -181,7 +183,10 @@ internal sealed record HumanMeasure(double? Pt, bool Editable);
 
 internal sealed record HumanProperty(string Name, object? Value, string Source, bool Editable);
 
-internal sealed record LayoutInspection(IReadOnlyList<ControlInfo> Controls);
+internal sealed record LayoutInspection(
+    IReadOnlyList<ControlInfo> Controls,
+    Dictionary<string, object?>? FrxFormControl = null,
+    Dictionary<string, object?>? ParserValidation = null);
 
 internal sealed record RecordDump(
     int Index,

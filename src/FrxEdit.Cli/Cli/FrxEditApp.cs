@@ -1,4 +1,4 @@
-﻿internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
+internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 {
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -53,7 +53,13 @@
         var project = UserFormProject.Load(frmPath);
         var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
         var layout = FrxBinary.Read(project.FrxPath).Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
-        var rawDocument = new LayoutDocument(project.FormName, Path.GetFileName(project.FrxPath), project.FormProperties, layout.Controls);
+        var rawDocument = new LayoutDocument(
+            project.FormName,
+            Path.GetFileName(project.FrxPath),
+            project.FormProperties,
+            layout.Controls,
+            layout.FrxFormControl,
+            layout.ParserValidation);
         var humanDocument = HumanLayoutDocument.FromRaw(rawDocument);
         WriteJson(parsed.GetOption("out"), humanDocument);
 
