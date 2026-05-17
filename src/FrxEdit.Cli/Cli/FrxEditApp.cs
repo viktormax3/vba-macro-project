@@ -22,6 +22,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 "inspect" => Inspect(args[1..]),
                 "apply" => Apply(args[1..]),
                 "validate" => Validate(args[1..]),
+                "rebuild" => Rebuild(args[1..]),
                 "dump-records" => DumpRecords(args[1..]),
                 "dump-storage" => DumpStorage(args[1..]),
                 "dump-stream-records" => DumpStreamRecords(args[1..]),
@@ -107,6 +108,47 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         return 0;
     }
 
+
+    private int Rebuild(string[] args)
+    {
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
+        var frmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var outFrmPath = Path.GetFullPath(parsed.RequireOption("out"));
+        var parserMode = parsed.GetParserModeOption("mode", ParserMode.Strict);
+
+        var project = UserFormProject.Load(frmPath);
+        var source = FrxBinary.Read(project.FrxPath);
+
+        // Validate the source first. This keeps the first rebuilder pass deliberately conservative:
+        // it only round-trips FRX files that the documented parser already understands.
+        var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var rebuiltBytes = FrxRebuilder.RebuildContainer(source);
+
+        var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
+        Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
+        File.WriteAllBytes(outFrxPath, rebuiltBytes);
+
+        var updatedFrm = UserFormProject.ReplaceOleObjectBlob(project.FrmText, Path.GetFileName(outFrxPath));
+        File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
+        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, null);
+
+        var rebuilt = FrxBinary.Read(outFrxPath);
+        var rebuiltLayout = rebuilt.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var comparison = RebuildComparison.From(sourceLayout, rebuiltLayout);
+
+        stdout.WriteLine($"Wrote {outFrmPath}");
+        stdout.WriteLine($"Wrote {outFrxPath}");
+        stdout.WriteLine($"OK: rebuilt CFB container and validated with parser mode {parserMode.ToString().ToLowerInvariant()}");
+        stdout.WriteLine($"OK: controls {comparison.SourceControlCount} -> {comparison.RebuiltControlCount}, semantic match: {comparison.SemanticMatch}");
+
+        if (parsed.GetOption("report-out") is { } reportOut)
+        {
+            WriteJson(reportOut, comparison);
+        }
+
+        return 0;
+    }
+
     private int Validate(string[] args)
     {
         var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
@@ -182,6 +224,8 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");
+        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--report-out rebuild.report.json]");
+        stdout.WriteLine("  rebuild pass 1 regenerates the OLE/CFB container while preserving logical stream bytes, then validates the result.");
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");

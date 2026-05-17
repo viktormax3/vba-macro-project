@@ -1341,37 +1341,90 @@ internal sealed class FrxBinary
             throw new CliException($"Property '{property}' for '{controlName}' is longer than the current in-place capacity ({span.InPlaceByteCapacity} bytes). Rebuild editing will be needed for longer strings.");
         }
 
+        var serializedByteCount = bytes.Length;
         if (span.CountOffset is not null)
         {
-            // To prevent corruption of subsequent fields in the stream during in-place editing,
-            // we must preserve the original aligned (padded) byte count.
-            // We achieve this by padding the string with null bytes up to the original padded byte count,
-            // and setting the count header to represent the full padded capacity.
-            // Both our inspector and MSForms/VBA will automatically trim trailing nulls.
-            var targetByteCount = span.PaddedByteCount;
-            var count = (uint)targetByteCount;
+            // The in-place editor must not change the aligned byte range occupied by the fmString.
+            // MSForms computes following fields from CountOfBytesWithCompressionFlag + Align4(count).
+            // If we shorten a string from an Align4 bucket of 16 bytes to one of 8 bytes without
+            // rebuilding the stream, the next fields are parsed from the wrong offsets. To avoid that,
+            // preserve the original aligned span and fill the counted tail with null bytes. The reader
+            // trims trailing binary characters, while subsequent field offsets remain byte-for-byte stable.
+            serializedByteCount = ChooseStableSerializedByteCount(
+                bytes.Length,
+                span.PaddedByteCount,
+                span.Compressed,
+                controlName,
+                property);
+
+            var count = (uint)serializedByteCount;
             if (span.Compressed)
             {
                 count |= 0x8000_0000u;
             }
 
             BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(span.CountOffset.Value, 4), count);
-
-            // Pad the bytes array with nulls to match targetByteCount
-            if (bytes.Length < targetByteCount)
-            {
-                var paddedBytes = new byte[targetByteCount];
-                bytes.CopyTo(paddedBytes, 0);
-                bytes = paddedBytes;
-            }
         }
         else if (bytes.Length != span.ByteCount)
         {
             throw new CliException($"Property '{property}' for '{controlName}' has no count offset metadata, so the current in-place editor can only write strings with exactly {span.ByteCount} bytes.");
         }
 
+        if (serializedByteCount > bytes.Length)
+        {
+            var padded = new byte[serializedByteCount];
+            bytes.CopyTo(padded, 0);
+            bytes = padded;
+        }
+
         bytes.CopyTo(Bytes.AsSpan(span.DataOffset, bytes.Length));
         Bytes.AsSpan(span.DataOffset + bytes.Length, span.PaddedByteCount - bytes.Length).Clear();
+    }
+
+    private static int ChooseStableSerializedByteCount(
+        int actualByteCount,
+        int originalPaddedByteCount,
+        bool compressed,
+        string controlName,
+        string property)
+    {
+        if (originalPaddedByteCount < 0 || originalPaddedByteCount % 4 != 0)
+        {
+            throw new CliException($"Property '{property}' for '{controlName}' has invalid string span padding metadata ({originalPaddedByteCount}).");
+        }
+
+        if (Align4(actualByteCount) == originalPaddedByteCount)
+        {
+            return actualByteCount;
+        }
+
+        if (originalPaddedByteCount == 0)
+        {
+            if (actualByteCount == 0)
+            {
+                return 0;
+            }
+
+            throw new CliException($"Property '{property}' for '{controlName}' has no in-place string capacity. Rebuild editing is required.");
+        }
+
+        // Pick the smallest count that keeps Align4(count) equal to the original physical span.
+        // For example, a 16-byte span accepts counts 13..16; a 4-byte span accepts counts 1..4.
+        // This minimizes counted trailing null characters while preserving downstream offsets.
+        var candidate = Math.Max(actualByteCount, originalPaddedByteCount - 3);
+
+        // Uncompressed fmString data is UTF-16LE, so the byte count must remain even.
+        if (!compressed && (candidate & 1) != 0)
+        {
+            candidate++;
+        }
+
+        if (candidate > originalPaddedByteCount || Align4(candidate) != originalPaddedByteCount)
+        {
+            throw new CliException($"Property '{property}' for '{controlName}' cannot be written in-place without changing the aligned string span. Rebuild editing is required.");
+        }
+
+        return candidate;
     }
 
     private static bool TryGetStringSpan(Dictionary<string, object?> properties, string property, out StringSpanInfo span)

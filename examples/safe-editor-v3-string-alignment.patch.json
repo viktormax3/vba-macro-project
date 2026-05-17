@@ -1,0 +1,16 @@
+{
+  "layout": {
+    "CheckBox3": {
+      "leftPt": 70,
+      "topPt": 50,
+      "widthPt": 90,
+      "heightPt": 22
+    }
+  },
+  "properties": {
+    "CheckBox3": {
+      "caption": "Corte",
+      "tabIndex": 4
+    }
+  }
+}
