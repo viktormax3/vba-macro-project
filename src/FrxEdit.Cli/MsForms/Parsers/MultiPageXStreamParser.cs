@@ -263,7 +263,7 @@ internal static class MultiPageXStreamParser
         properties["multiPagePageIdsLocalOffset"] = pageIdsLocalOffset;
         properties["multiPagePageIdsOffset"] = MsFormsBinary.OffsetAt(fileOffsets, pageIdsLocalOffset);
         properties["multiPagePageIdsEndLocalOffset"] = cursor;
-        properties["multiPagePageIdsEndOffset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
+        properties["multiPagePageIdsEndOffset"] = MsFormsBinary.EndOffsetAt(fileOffsets, cursor);
         properties["multiPageXStreamLength"] = endOfStream;
         properties["multiPageXStreamValidation"] = cursor == endOfStream ? "exact" : $"remaining {endOfStream - cursor} bytes";
         return true;

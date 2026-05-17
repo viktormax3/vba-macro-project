@@ -317,7 +317,107 @@ internal static class ObjectStreamParser
             }
         }
 
+        var streamDataCursor = 4 + cbImage;
+        properties["imageStreamDataLocalOffset"] = streamDataCursor;
+        properties["imageStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, streamDataCursor);
+
+        if (MsFormsBinary.HasBit(propMask, 10))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref streamDataCursor, "picture", properties))
+            {
+                properties["pictureStreamWarning"] = $"Could not parse ImageStreamData.Picture at local offset {streamDataCursor}.";
+            }
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 14))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref streamDataCursor, "mouseIcon", properties))
+            {
+                properties["mouseIconStreamWarning"] = $"Could not parse ImageStreamData.MouseIcon at local offset {streamDataCursor}.";
+            }
+        }
+
+        properties["imageStreamDataEndLocalOffset"] = streamDataCursor;
+        properties["imageStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, streamDataCursor);
+        if (streamDataCursor != data.Length)
+        {
+            properties["imageStreamDataWarning"] = $"Parsed ImageStreamData ended at {streamDataCursor}, but object stream length is {data.Length}.";
+        }
+
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
+    }
+
+    private static bool TryReadGuidAndPicture(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        string propertyPrefix,
+        Dictionary<string, object?> properties)
+    {
+        var start = cursor;
+        if (cursor + 24 > data.Length)
+        {
+            return false;
+        }
+
+        properties[$"{propertyPrefix}StreamLocalOffset"] = start;
+        properties[$"{propertyPrefix}StreamOffset"] = MsFormsBinary.OffsetAt(fileOffsets, start);
+        properties[$"{propertyPrefix}ClsidLocalOffset"] = cursor;
+        properties[$"{propertyPrefix}ClsidOffset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
+        properties[$"{propertyPrefix}Clsid"] = ReadGuidString(data, cursor);
+        cursor += 16;
+
+        var preambleLocalOffset = cursor;
+        var preamble = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+        cursor += 4;
+        properties[$"{propertyPrefix}Preamble"] = $"0x{preamble:X8}";
+        properties[$"{propertyPrefix}PreambleLocalOffset"] = preambleLocalOffset;
+        properties[$"{propertyPrefix}PreambleOffset"] = MsFormsBinary.OffsetAt(fileOffsets, preambleLocalOffset);
+
+        var sizeLocalOffset = cursor;
+        var pictureSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+        cursor += 4;
+        properties[$"{propertyPrefix}DataByteCount"] = pictureSize;
+        properties[$"{propertyPrefix}DataByteCountLocalOffset"] = sizeLocalOffset;
+        properties[$"{propertyPrefix}DataByteCountOffset"] = MsFormsBinary.OffsetAt(fileOffsets, sizeLocalOffset);
+
+        if (preamble != 0x0000_746Cu)
+        {
+            properties[$"{propertyPrefix}PreambleWarning"] = $"StdPicture preamble is 0x{preamble:X8}, expected 0x0000746C.";
+        }
+
+        if (pictureSize > int.MaxValue || cursor + (int)pictureSize > data.Length)
+        {
+            cursor = start;
+            return false;
+        }
+
+        properties[$"{propertyPrefix}DataLocalOffset"] = cursor;
+        properties[$"{propertyPrefix}DataOffset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
+        properties[$"{propertyPrefix}Format"] = DetectPictureFormat(data.AsSpan(cursor, (int)pictureSize));
+        cursor += (int)pictureSize;
+        properties[$"{propertyPrefix}StreamEndLocalOffset"] = cursor;
+        properties[$"{propertyPrefix}StreamEndOffset"] = MsFormsBinary.EndOffsetAt(fileOffsets, cursor);
+        return true;
+    }
+
+    private static string ReadGuidString(byte[] data, int offset)
+    {
+        var bytes = new byte[16];
+        Array.Copy(data, offset, bytes, 0, 16);
+        return new Guid(bytes).ToString("B").ToUpperInvariant();
+    }
+
+    private static string DetectPictureFormat(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) return "JPEG";
+        if (bytes.Length >= 6 && bytes[0] == (byte)'G' && bytes[1] == (byte)'I' && bytes[2] == (byte)'F') return "GIF";
+        if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == (byte)'P' && bytes[2] == (byte)'N' && bytes[3] == (byte)'G') return "PNG";
+        if (bytes.Length >= 2 && bytes[0] == (byte)'B' && bytes[1] == (byte)'M') return "BMP";
+        if (bytes.Length >= 4 && bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x01 && bytes[3] == 0x00) return "ICO";
+        if (bytes.Length >= 4 && bytes[0] == 0xD7 && bytes[1] == 0xCD && bytes[2] == 0xC6 && bytes[3] == 0x9A) return "WMF";
+        if (bytes.Length >= 44 && bytes[40] == (byte)'E' && bytes[41] == (byte)'M' && bytes[42] == (byte)'F') return "EMF";
+        return "unknown";
     }
 
     private static ObjectStreamProperties? TryReadScrollBar(StorageEntryDump stream)
@@ -584,7 +684,7 @@ internal static class ObjectStreamParser
             properties["tabFlagsLocalOffset"] = tabFlagsStart;
             properties["tabFlagsOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, tabFlagsStart);
             properties["tabFlagsEndLocalOffset"] = cursor;
-            properties["tabFlagsEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+            properties["tabFlagsEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
         }
 
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);

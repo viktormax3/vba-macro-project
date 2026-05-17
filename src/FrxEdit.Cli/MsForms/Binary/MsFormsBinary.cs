@@ -116,6 +116,21 @@ internal static class MsFormsBinary
         return streamOffset >= 0 && streamOffset < fileOffsets.Length ? fileOffsets[streamOffset] : 0;
     }
 
+    public static int EndOffsetAt(int[] fileOffsets, int streamOffset)
+    {
+        if (streamOffset >= 0 && streamOffset < fileOffsets.Length)
+        {
+            return fileOffsets[streamOffset];
+        }
+
+        if (streamOffset == fileOffsets.Length && fileOffsets.Length > 0)
+        {
+            return fileOffsets[^1] + 1;
+        }
+
+        return 0;
+    }
+
     public static CountOfBytesWithCompressionFlag DecodeCountOfBytesWithCompressionFlag(uint value) =>
         new((int)(value & 0x7FFF_FFFF), (value & 0x8000_0000) != 0);
 
