@@ -24,7 +24,8 @@ internal static class RebuildPatchApplier
 
         if ((patch.Properties is null || patch.Properties.Count == 0) &&
             (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0) &&
-            (!allowFormSitePatch || patch.Renames is null || patch.Renames.Count == 0))
+            (!allowFormSitePatch || patch.Renames is null || patch.Renames.Count == 0) &&
+            (!allowFormSitePatch || patch.Add is null || patch.Add.Count == 0))
         {
             return source;
         }
@@ -42,7 +43,7 @@ internal static class RebuildPatchApplier
             ? patch.Renames?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        var controls = new List<ControlInfo>(source.Controls.Count);
+        var controls = new List<ControlInfo>(source.Controls.Count + (patch.Add?.Count ?? 0));
         foreach (var control in source.Controls)
         {
             renameByName.TryGetValue(control.Name, out var newName);
@@ -80,14 +81,19 @@ internal static class RebuildPatchApplier
                 .ToList();
         }
 
+        if (allowFormSitePatch && patch.Add is { Count: > 0 })
+        {
+            controls.AddRange(BuildAddedControls(controls, patch.Add));
+        }
+
         return source with { Controls = controls };
     }
 
     public static void ValidateObjectPatch(PatchDocument patch, bool allowFormSitePatch = false)
     {
-        if (patch.Add is { Count: > 0 })
+        if (patch.Add is { Count: > 0 } && !allowFormSitePatch)
         {
-            throw new CliException("Rebuild object-patch does not support 'add' yet. Add/remove controls requires FormSiteData rebuild.");
+            throw new CliException("Rebuild object-patch does not support 'add' because new controls require FormSiteData rebuild. Use '--stream-mode full-patch'.");
         }
 
         if (patch.Renames is { Count: > 0 } && !allowFormSitePatch)
@@ -111,6 +117,117 @@ internal static class RebuildPatchApplier
                 }
             }
         }
+
+        foreach (var add in patch.Add ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(add.Name))
+            {
+                throw new CliException("Each add entry requires a non-empty 'name'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(add.FromTemplate))
+            {
+                throw new CliException($"Add entry '{add.Name}' requires 'fromTemplate'. Pass 32 clones an existing control template instead of creating a control from scratch.");
+            }
+        }
+    }
+
+    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions)
+    {
+        var names = existingControls.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var maxId = existingControls
+            .Select(c => c.Properties is not null && TryGetInt(c.Properties, "siteId", out var id) ? id : 0)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        var result = new List<ControlInfo>();
+        foreach (var add in additions)
+        {
+            var name = add.Name!.Trim();
+            if (!names.Add(name))
+            {
+                throw new CliException($"Add target '{name}' would duplicate an existing control.");
+            }
+
+            var template = existingControls.FirstOrDefault(c => c.Name.Equals(add.FromTemplate, StringComparison.OrdinalIgnoreCase))
+                ?? throw new CliException($"Add template '{add.FromTemplate}' does not exist.");
+
+            if (!string.IsNullOrWhiteSpace(add.Type) && !template.Type.Equals(add.Type, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException($"Add target '{name}' requested type '{add.Type}', but template '{template.Name}' is type '{template.Type}'. Pass 32 only supports same-type template clones.");
+            }
+
+            var parent = add.Parent is null ? template.Parent : (string.IsNullOrWhiteSpace(add.Parent) ? null : add.Parent.Trim());
+            if (!string.Equals(parent, template.Parent, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException($"Add target '{name}' cannot change parent yet. Pass 32 only supports cloning into the same parent/storage as template '{template.Name}'.");
+            }
+
+            if (template.Properties is null)
+            {
+                throw new CliException($"Add template '{template.Name}' has no structured metadata.");
+            }
+
+            var props = new Dictionary<string, object?>(template.Properties, StringComparer.OrdinalIgnoreCase);
+            maxId++;
+            props["isAddedControl"] = true;
+            props["templateControlName"] = template.Name;
+            props["name"] = name;
+            props["nameRaw"] = name;
+            props["siteName"] = name;
+            props["siteId"] = maxId;
+            props["id"] = maxId;
+            props["tabIndex"] = add.Properties is not null && add.Properties.TryGetValue("tabIndex", out var tabIndexElement)
+                ? RequireUInt16(name, "tabIndex", tabIndexElement)
+                : NextTabIndexForParent(existingControls.Concat(result), parent);
+
+            if (!string.IsNullOrWhiteSpace(add.Caption))
+            {
+                props["caption"] = add.Caption;
+            }
+
+            if (!string.IsNullOrWhiteSpace(add.Value))
+            {
+                props["value"] = add.Value;
+            }
+
+            foreach (var (propertyName, value) in add.Properties ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase))
+            {
+                ApplyPropertyToDictionary(name, props, propertyName, value);
+            }
+
+            var left = add.Left ?? ToRawPoints(add.LeftPt) ?? template.Left;
+            var top = add.Top ?? ToRawPoints(add.TopPt) ?? template.Top;
+            var rawWidth = add.RawWidth ?? add.Width ?? ToRawPoints(add.WidthPt) ?? template.RawWidth;
+            var rawHeight = add.RawHeight ?? add.Height ?? ToRawPoints(add.HeightPt) ?? template.RawHeight;
+
+            result.Add(template with
+            {
+                Name = name,
+                Parent = parent,
+                Left = left,
+                Top = top,
+                RawWidth = rawWidth,
+                RawHeight = rawHeight,
+                LeftPt = left is int l ? FromRawPoints(l) : template.LeftPt,
+                TopPt = top is int t ? FromRawPoints(t) : template.TopPt,
+                WidthPt = rawWidth is int w ? FromRawPoints(w) : template.WidthPt,
+                HeightPt = rawHeight is int h ? FromRawPoints(h) : template.HeightPt,
+                Properties = props
+            });
+        }
+
+        return result;
+    }
+
+    private static int NextTabIndexForParent(IEnumerable<ControlInfo> controls, string? parent)
+    {
+        var max = controls
+            .Where(c => string.Equals(c.Parent, parent, StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Properties is not null && TryGetInt(c.Properties, "tabIndex", out var tabIndex) ? tabIndex : -1)
+            .DefaultIfEmpty(-1)
+            .Max();
+        return Math.Min(max + 1, ushort.MaxValue);
     }
 
     private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout, string? newName)
@@ -123,37 +240,7 @@ internal static class RebuildPatchApplier
         var props = new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
         foreach (var (propertyName, value) in requested ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase))
         {
-            switch (propertyName.ToLowerInvariant())
-            {
-                case "caption":
-                case "value":
-                case "groupname":
-                case "fontname":
-                    props[CanonicalPropertyName(propertyName)] = RequireString(control.Name, propertyName, value);
-                    break;
-                case "controltiptext":
-                    if (!props.ContainsKey("controlTipTextSpan"))
-                    {
-                        throw new CliException($"Cannot patch '{control.Name}.controlTipText': this control does not expose a documented controlTipTextSpan in FormSiteData.");
-                    }
-                    props["controlTipText"] = RequireString(control.Name, propertyName, value);
-                    break;
-                case "backcolor":
-                case "forecolor":
-                case "bordercolor":
-                    props[CanonicalPropertyName(propertyName)] = RequireColorLikeString(control.Name, propertyName, value);
-                    break;
-                case "fontsize":
-                    var size = RequireFontSize(control.Name, value);
-                    props["fontSize"] = size;
-                    props["fontHeightRaw"] = (int)Math.Round(size * 20.0, MidpointRounding.AwayFromZero);
-                    break;
-                case "tabindex":
-                    props["tabIndex"] = RequireUInt16(control.Name, propertyName, value);
-                    break;
-                default:
-                    throw new CliException($"Property '{propertyName}' is not supported by object-patch.");
-            }
+            ApplyPropertyToDictionary(control.Name, props, propertyName, value);
         }
 
         var left = control.Left;
@@ -195,6 +282,41 @@ internal static class RebuildPatchApplier
             HeightPt = rawHeight is int h ? FromRawPoints(h) : control.HeightPt,
             Properties = props
         };
+    }
+
+    private static void ApplyPropertyToDictionary(string controlName, Dictionary<string, object?> props, string propertyName, JsonElement value)
+    {
+        switch (propertyName.ToLowerInvariant())
+        {
+            case "caption":
+            case "value":
+            case "groupname":
+            case "fontname":
+                props[CanonicalPropertyName(propertyName)] = RequireString(controlName, propertyName, value);
+                break;
+            case "controltiptext":
+                if (!props.ContainsKey("controlTipTextSpan"))
+                {
+                    throw new CliException($"Cannot patch '{controlName}.controlTipText': this control does not expose a documented controlTipTextSpan in FormSiteData.");
+                }
+                props["controlTipText"] = RequireString(controlName, propertyName, value);
+                break;
+            case "backcolor":
+            case "forecolor":
+            case "bordercolor":
+                props[CanonicalPropertyName(propertyName)] = RequireColorLikeString(controlName, propertyName, value);
+                break;
+            case "fontsize":
+                var size = RequireFontSize(controlName, value);
+                props["fontSize"] = size;
+                props["fontHeightRaw"] = (int)Math.Round(size * 20.0, MidpointRounding.AwayFromZero);
+                break;
+            case "tabindex":
+                props["tabIndex"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            default:
+                throw new CliException($"Property '{propertyName}' is not supported by rebuild patch.");
+        }
     }
 
     private const double HimetricPerPoint = 2540.0 / 72.0;
@@ -271,5 +393,56 @@ internal static class RebuildPatchApplier
         }
 
         return size;
+    }
+
+    private static bool TryGetInt(Dictionary<string, object?> props, string key, out int value)
+    {
+        value = 0;
+        if (!props.TryGetValue(key, out var raw) || raw is null)
+        {
+            return false;
+        }
+
+        switch (raw)
+        {
+            case int i:
+                value = i;
+                return true;
+            case long l when l >= int.MinValue && l <= int.MaxValue:
+                value = (int)l;
+                return true;
+            case uint u when u <= int.MaxValue:
+                value = (int)u;
+                return true;
+            case ulong ul when ul <= int.MaxValue:
+                value = (int)ul;
+                return true;
+            case short s:
+                value = s;
+                return true;
+            case ushort us:
+                value = us;
+                return true;
+            case byte b:
+                value = b;
+                return true;
+            case sbyte sb:
+                value = sb;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var parsed):
+                value = parsed;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out var parsed64) && parsed64 >= int.MinValue && parsed64 <= int.MaxValue:
+                value = (int)parsed64;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetUInt64(out var parsedU64) && parsedU64 <= int.MaxValue:
+                value = (int)parsedU64;
+                return true;
+            case string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed):
+                value = parsed;
+                return true;
+            default:
+                return false;
+        }
     }
 }

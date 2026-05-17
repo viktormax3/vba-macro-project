@@ -55,6 +55,9 @@ internal static class StructuredMsFormsParser
             site.ExtraProperties["siteDataLocalOffset"] = best.Offset;
             site.ExtraProperties["siteDataCountOfSites"] = best.CountOfSites;
             site.ExtraProperties["siteDataCountOfBytes"] = best.CountOfBytes;
+            site.ExtraProperties["siteDataCountOfSitesLocalOffset"] = best.CountOfSitesOffset;
+            site.ExtraProperties["siteDataCountOfBytesLocalOffset"] = best.CountOfBytesOffset;
+            site.ExtraProperties["siteDataDepthsLocalOffset"] = best.DepthStartOffset;
             site.ExtraProperties["siteDataEndOffset"] = best.EndOffset;
             if (best.ClassTable.Count > 0)
             {
@@ -63,6 +66,9 @@ internal static class StructuredMsFormsParser
             if (stream.FileOffsets.Length == stream.Data.Length)
             {
                 site.ExtraProperties["siteDataFileOffset"] = stream.FileOffsets[best.Offset];
+                site.ExtraProperties["siteDataCountOfSitesOffset"] = stream.FileOffsets[best.CountOfSitesOffset];
+                site.ExtraProperties["siteDataCountOfBytesOffset"] = stream.FileOffsets[best.CountOfBytesOffset];
+                site.ExtraProperties["siteDataDepthsOffset"] = stream.FileOffsets[best.DepthStartOffset];
                 site.ExtraProperties["siteDataEndFileOffset"] = best.EndOffset < stream.FileOffsets.Length
                     ? stream.FileOffsets[best.EndOffset]
                     : stream.FileOffsets[^1] + 1;
@@ -165,8 +171,10 @@ internal static class StructuredMsFormsParser
             return false;
         }
 
-        var countOfSites = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-        var countOfBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor + 4, 4));
+        var countOfSitesOffset = cursor;
+        var countOfBytesOffset = cursor + 4;
+        var countOfSites = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(countOfSitesOffset, 4));
+        var countOfBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(countOfBytesOffset, 4));
         cursor += 8;
 
         if (countOfSites is 0 or > 500 || countOfBytes is 0 or > 1_000_000)
@@ -219,6 +227,8 @@ internal static class StructuredMsFormsParser
             classInfoCount,
             (int)countOfSites,
             (int)countOfBytes,
+            countOfSitesOffset,
+            countOfBytesOffset,
             depthStart,
             expectedEnd,
             score,
@@ -822,6 +832,8 @@ internal static class StructuredMsFormsParser
         ushort ClassInfoCount,
         int CountOfSites,
         int CountOfBytes,
+        int CountOfSitesOffset,
+        int CountOfBytesOffset,
         int DepthStartOffset,
         int EndOffset,
         int Score,

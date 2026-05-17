@@ -1,0 +1,18 @@
+{
+  "add": [
+    {
+      "fromTemplate": "CommandButton2",
+      "name": "CommandButtonExtra",
+      "leftPt": 6,
+      "topPt": 62,
+      "widthPt": 80,
+      "heightPt": 22,
+      "caption": "Boton nuevo creado por rebuild",
+      "properties": {
+        "fontSize": 9,
+        "backColor": "&H00404040&",
+        "foreColor": "&H00FFFFFF&"
+      }
+    }
+  ]
+}
