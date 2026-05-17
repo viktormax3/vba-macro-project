@@ -3,7 +3,7 @@ internal static class FrxRebuilder
     public static byte[] RebuildContainer(FrxBinary source, LayoutInspection? layout = null, RebuildStreamMode streamMode = RebuildStreamMode.ContainerOnly)
     {
         var dump = CompoundStorageInspector.Inspect(source.Bytes, source.OleOffset);
-        if (streamMode is RebuildStreamMode.ObjectStreamRoundTrip or RebuildStreamMode.ObjectStreamSerializeFixed)
+        if (streamMode is RebuildStreamMode.ObjectStreamRoundTrip or RebuildStreamMode.ObjectStreamSerializeFixed or RebuildStreamMode.ObjectStreamNormalizeStrings)
         {
             if (layout is null)
             {
@@ -13,7 +13,12 @@ internal static class FrxRebuilder
             dump = ObjectStreamRoundTripRewriter.RewriteObjectStreams(
                 dump,
                 layout,
-                activeSerialize: streamMode == RebuildStreamMode.ObjectStreamSerializeFixed);
+                mode: streamMode switch
+                {
+                    RebuildStreamMode.ObjectStreamSerializeFixed => ObjectStreamRewriteMode.ActiveSerializeFixed,
+                    RebuildStreamMode.ObjectStreamNormalizeStrings => ObjectStreamRewriteMode.NormalizeStrings,
+                    _ => ObjectStreamRewriteMode.RoundTrip
+                });
         }
 
         var rebuiltOle = CompoundStorageRebuilder.BuildFromDump(dump);
@@ -29,5 +34,6 @@ internal enum RebuildStreamMode
 {
     ContainerOnly,
     ObjectStreamRoundTrip,
-    ObjectStreamSerializeFixed
+    ObjectStreamSerializeFixed,
+    ObjectStreamNormalizeStrings
 }

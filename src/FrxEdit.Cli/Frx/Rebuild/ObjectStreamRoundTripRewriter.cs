@@ -1,6 +1,9 @@
 internal static class ObjectStreamRoundTripRewriter
 {
-    public static CompoundStorageDump RewriteObjectStreams(CompoundStorageDump dump, LayoutInspection layout, bool activeSerialize = false)
+    public static CompoundStorageDump RewriteObjectStreams(
+        CompoundStorageDump dump,
+        LayoutInspection layout,
+        ObjectStreamRewriteMode mode = ObjectStreamRewriteMode.RoundTrip)
     {
         var slicesByObjectStreamPath = BuildSlicesByObjectStreamPath(layout);
         if (slicesByObjectStreamPath.Count == 0)
@@ -8,27 +11,97 @@ internal static class ObjectStreamRoundTripRewriter
             return dump;
         }
 
-        var streams = dump.Streams.Select(stream =>
+        var rewrittenObjectStreams = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        var sizeUpdates = new List<ObjectStreamSizeUpdate>();
+        foreach (var stream in dump.Streams)
         {
             if (!stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) ||
                 !stream.Name.Equals("o", StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(stream.Path) ||
                 !slicesByObjectStreamPath.TryGetValue(stream.Path, out var slices))
             {
-                return stream;
+                continue;
             }
 
-            var rewritten = RewriteObjectStream(stream.Path, stream.Data, slices, activeSerialize);
-            return stream with
+            var rewritten = RewriteObjectStream(stream.Path, stream.Data, slices, mode, sizeUpdates);
+            rewrittenObjectStreams[stream.Path] = rewritten;
+        }
+
+        if (rewrittenObjectStreams.Count == 0)
+        {
+            return dump;
+        }
+
+        var updatesByFormStreamPath = sizeUpdates
+            .GroupBy(update => update.FormStreamPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var streams = dump.Streams.Select(stream =>
+        {
+            if (!string.IsNullOrWhiteSpace(stream.Path) && rewrittenObjectStreams.TryGetValue(stream.Path, out var rewrittenObject))
             {
-                Data = rewritten,
-                Size = (ulong)rewritten.Length,
-                SampleHex = Convert.ToHexString(rewritten.AsSpan(0, Math.Min(32, rewritten.Length))),
-                DataHex = rewritten.Length <= 512 ? Convert.ToHexString(rewritten) : null
-            };
+                return WithNewData(stream, rewrittenObject);
+            }
+
+            if (mode == ObjectStreamRewriteMode.NormalizeStrings &&
+                !string.IsNullOrWhiteSpace(stream.Path) &&
+                stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+                stream.Name.Equals("f", StringComparison.OrdinalIgnoreCase) &&
+                updatesByFormStreamPath.TryGetValue(stream.Path, out var updates))
+            {
+                var patched = PatchObjectStreamSizes(stream, updates);
+                return WithNewData(stream, patched);
+            }
+
+            return stream;
         }).ToList();
 
         return dump with { Streams = streams };
+    }
+
+    private static StorageEntryDump WithNewData(StorageEntryDump stream, byte[] data) =>
+        stream with
+        {
+            Data = data,
+            Size = (ulong)data.Length,
+            SampleHex = Convert.ToHexString(data.AsSpan(0, Math.Min(32, data.Length))),
+            DataHex = data.Length <= 512 ? Convert.ToHexString(data) : null
+        };
+
+    private static byte[] PatchObjectStreamSizes(StorageEntryDump formStream, IReadOnlyList<ObjectStreamSizeUpdate> updates)
+    {
+        var output = formStream.Data.ToArray();
+        foreach (var update in updates)
+        {
+            if (!TryMapFileOffsetToLocal(formStream.FileOffsets, update.SiteObjectStreamSizeFileOffset, out var localOffset))
+            {
+                throw new CliException($"Cannot update ObjectStreamSize for '{update.ControlName}' in '{formStream.Path}': file offset {update.SiteObjectStreamSizeFileOffset} is not part of the form stream.");
+            }
+
+            if (localOffset < 0 || localOffset + 4 > output.Length)
+            {
+                throw new CliException($"Cannot update ObjectStreamSize for '{update.ControlName}' in '{formStream.Path}': local offset {localOffset} is outside the form stream.");
+            }
+
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(localOffset, 4), unchecked((uint)update.NewSize));
+        }
+
+        return output;
+    }
+
+    private static bool TryMapFileOffsetToLocal(int[] fileOffsets, int fileOffset, out int localOffset)
+    {
+        for (var i = 0; i < fileOffsets.Length; i++)
+        {
+            if (fileOffsets[i] == fileOffset)
+            {
+                localOffset = i;
+                return true;
+            }
+        }
+
+        localOffset = -1;
+        return false;
     }
 
     private static Dictionary<string, List<ObjectStreamSlice>> BuildSlicesByObjectStreamPath(LayoutInspection layout)
@@ -72,7 +145,12 @@ internal static class ObjectStreamRoundTripRewriter
         return result;
     }
 
-    private static byte[] RewriteObjectStream(string path, byte[] original, IReadOnlyList<ObjectStreamSlice> slices, bool activeSerialize)
+    private static byte[] RewriteObjectStream(
+        string path,
+        byte[] original,
+        IReadOnlyList<ObjectStreamSlice> slices,
+        ObjectStreamRewriteMode mode,
+        List<ObjectStreamSizeUpdate> sizeUpdates)
     {
         using var output = new MemoryStream(original.Length);
         var cursor = 0;
@@ -80,12 +158,12 @@ internal static class ObjectStreamRoundTripRewriter
         {
             if (slice.Start < cursor)
             {
-                throw new CliException($"Cannot logical-roundtrip object stream '{path}': slice for '{slice.Control.Name}' overlaps a previous slice.");
+                throw new CliException($"Cannot rebuild object stream '{path}': slice for '{slice.Control.Name}' overlaps a previous slice.");
             }
 
             if (slice.Start + slice.Size > original.Length)
             {
-                throw new CliException($"Cannot logical-roundtrip object stream '{path}': slice for '{slice.Control.Name}' exceeds stream length.");
+                throw new CliException($"Cannot rebuild object stream '{path}': slice for '{slice.Control.Name}' exceeds stream length.");
             }
 
             if (slice.Start > cursor)
@@ -93,13 +171,22 @@ internal static class ObjectStreamRoundTripRewriter
                 output.Write(original, cursor, slice.Start - cursor);
             }
 
-            var payload = activeSerialize
-                ? ObjectPayloadSerializer.SerializeFixedLength(slice.Control, original.AsSpan(slice.Start, slice.Size))
-                : original.AsSpan(slice.Start, slice.Size).ToArray();
+            var originalPayload = original.AsSpan(slice.Start, slice.Size);
+            var payload = mode switch
+            {
+                ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(slice.Control, originalPayload),
+                ObjectStreamRewriteMode.NormalizeStrings => ObjectPayloadSerializer.SerializeNormalizedStrings(slice.Control, originalPayload),
+                _ => originalPayload.ToArray()
+            };
 
-            if (payload.Length != slice.Size)
+            if (mode == ObjectStreamRewriteMode.ActiveSerializeFixed && payload.Length != slice.Size)
             {
                 throw new CliException($"Cannot fixed-length serialize object stream '{path}': serializer for '{slice.Control.Name}' returned {payload.Length} bytes but the site declares {slice.Size} bytes.");
+            }
+
+            if (mode == ObjectStreamRewriteMode.NormalizeStrings && payload.Length != slice.Size)
+            {
+                AddSizeUpdate(slice.Control, payload.Length, sizeUpdates);
             }
 
             output.Write(payload, 0, payload.Length);
@@ -112,6 +199,19 @@ internal static class ObjectStreamRoundTripRewriter
         }
 
         return output.ToArray();
+    }
+
+    private static void AddSizeUpdate(ControlInfo control, int newSize, List<ObjectStreamSizeUpdate> sizeUpdates)
+    {
+        var props = control.Properties;
+        if (props is null ||
+            !TryGetString(props, "streamPath", out var formStreamPath) ||
+            !TryGetInt(props, "siteObjectStreamSizeOffset", out var siteObjectStreamSizeOffset))
+        {
+            throw new CliException($"Cannot normalize object payload for '{control.Name}': missing streamPath/siteObjectStreamSizeOffset metadata needed to update FormSiteData.");
+        }
+
+        sizeUpdates.Add(new ObjectStreamSizeUpdate(control.Name, formStreamPath, siteObjectStreamSizeOffset, newSize));
     }
 
     private static bool TryGetString(Dictionary<string, object?> props, string key, out string value)
@@ -163,4 +263,12 @@ internal static class ObjectStreamRoundTripRewriter
     }
 
     private sealed record ObjectStreamSlice(ControlInfo Control, int Start, int Size);
+    private sealed record ObjectStreamSizeUpdate(string ControlName, string FormStreamPath, int SiteObjectStreamSizeFileOffset, int NewSize);
+}
+
+internal enum ObjectStreamRewriteMode
+{
+    RoundTrip,
+    ActiveSerializeFixed,
+    NormalizeStrings
 }

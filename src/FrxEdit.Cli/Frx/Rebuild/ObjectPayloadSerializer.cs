@@ -51,6 +51,38 @@ internal static class ObjectPayloadSerializer
         return output;
     }
 
+
+
+    public static byte[] SerializeNormalizedStrings(ControlInfo control, ReadOnlySpan<byte> original)
+    {
+        // Variable-length preparation pass.  First rewrite known fixed fields exactly as pass 27
+        // does, then compact counted strings whose decoded value is shorter than the counted
+        // allocation currently present in the stream.  This removes the null-padding used by the
+        // safe in-place editor and proves that object payload sizes can change while FormSiteData
+        // ObjectStreamSize is updated by the caller.
+        var output = SerializeFixedLength(control, original);
+        var props = control.Properties;
+        if (props is null)
+        {
+            return output;
+        }
+
+        var segments = BuildNormalizableStringSegments(control, props);
+        if (segments.Count == 0)
+        {
+            return output;
+        }
+
+        foreach (var segment in segments
+            .OrderByDescending(segment => segment.Span.DataLocalOffset)
+            .ThenByDescending(segment => segment.Span.CountLocalOffset ?? -1))
+        {
+            output = NormalizeStringSegment(control.Name, segment, output);
+        }
+
+        return output;
+    }
+
     private static void SerializeCommandButton(ControlInfo control, Dictionary<string, object?> props, byte[] output)
     {
         RewriteByte(props, output, "minorVersion", 0);
@@ -211,6 +243,145 @@ internal static class ObjectPayloadSerializer
         BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(fixedLocalOffset, 4), value);
     }
 
+
+
+    private static List<StringSegment> BuildNormalizableStringSegments(ControlInfo control, Dictionary<string, object?> props)
+    {
+        var result = new List<StringSegment>();
+
+        void Add(string name, int? blockSizeLocalOffset)
+        {
+            if (!props.TryGetValue(name, out var rawValue) || rawValue is null)
+            {
+                return;
+            }
+
+            if (!TryGetStringSpan(props, name, out var span) || span.CountLocalOffset is null)
+            {
+                return;
+            }
+
+            result.Add(new StringSegment(name, rawValue.ToString() ?? string.Empty, span, blockSizeLocalOffset));
+        }
+
+        switch (control.Type)
+        {
+            case "CommandButton":
+                Add("caption", 2);
+                Add("fontName", TryGetInt(props, "textPropsLocalOffset", out var commandButtonTextPropsStart) ? commandButtonTextPropsStart + 2 : null);
+                break;
+            case "Label":
+                Add("caption", 2);
+                Add("fontName", TryGetInt(props, "textPropsLocalOffset", out var labelTextPropsStart) ? labelTextPropsStart + 2 : null);
+                break;
+            case "TextBox":
+            case "ComboBox":
+            case "ListBox":
+            case "CheckBox":
+            case "OptionButton":
+            case "ToggleButton":
+                Add("value", 2);
+                Add("caption", 2);
+                Add("groupName", 2);
+                Add("fontName", TryGetInt(props, "textPropsLocalOffset", out var morphTextPropsStart) ? morphTextPropsStart + 2 : null);
+                break;
+            case "TabStrip":
+                Add("fontName", TryGetInt(props, "textPropsLocalOffset", out var tabStripTextPropsStart) ? tabStripTextPropsStart + 2 : null);
+                break;
+        }
+
+        return result;
+    }
+
+    private static byte[] NormalizeStringSegment(string controlName, StringSegment segment, byte[] payload)
+    {
+        var span = segment.Span;
+        if (span.CountLocalOffset is not int countLocalOffset)
+        {
+            return payload;
+        }
+
+        if (countLocalOffset < 0 || countLocalOffset + 4 > payload.Length)
+        {
+            throw new CliException($"Cannot normalize {controlName}.{segment.PropertyName}: count offset {countLocalOffset} is outside the object payload.");
+        }
+
+        if (span.DataLocalOffset < 0 || span.DataLocalOffset > payload.Length ||
+            span.ByteCount < 0 || span.PaddedByteCount < 0 ||
+            span.DataLocalOffset + span.PaddedByteCount > payload.Length)
+        {
+            throw new CliException($"Cannot normalize {controlName}.{segment.PropertyName}: string span exceeds the object payload.");
+        }
+
+        var encoded = span.Compressed
+            ? Encoding.Latin1.GetBytes(segment.Value)
+            : Encoding.Unicode.GetBytes(segment.Value);
+
+        if (!span.Compressed && encoded.Length % 2 != 0)
+        {
+            throw new CliException($"Cannot normalize {controlName}.{segment.PropertyName}: UTF-16 byte count must be even.");
+        }
+
+        var newPaddedByteCount = Align4(encoded.Length);
+        if (newPaddedByteCount > span.PaddedByteCount)
+        {
+            throw new CliException($"Cannot normalize {controlName}.{segment.PropertyName}: decoded value needs {encoded.Length} bytes, exceeding current padded allocation {span.PaddedByteCount}. Full model mutation will be supported by a later serializer pass.");
+        }
+
+        // No structural change needed; still write the real count and clear padding so the payload
+        // is canonical even when size stays equal.
+        var count = (uint)encoded.Length;
+        if (span.Compressed)
+        {
+            count |= 0x8000_0000u;
+        }
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(countLocalOffset, 4), count);
+
+        var delta = newPaddedByteCount - span.PaddedByteCount;
+        if (segment.BlockSizeLocalOffset is int blockSizeLocalOffset && delta != 0)
+        {
+            AdjustUInt16At(payload, blockSizeLocalOffset, delta, $"{controlName}.{segment.PropertyName}");
+        }
+
+        if (newPaddedByteCount == span.PaddedByteCount)
+        {
+            payload.AsSpan(span.DataLocalOffset, span.PaddedByteCount).Clear();
+            encoded.CopyTo(payload.AsSpan(span.DataLocalOffset));
+            return payload;
+        }
+
+        using var output = new MemoryStream(payload.Length + delta);
+        output.Write(payload, 0, span.DataLocalOffset);
+        output.Write(encoded, 0, encoded.Length);
+        if (newPaddedByteCount > encoded.Length)
+        {
+            output.Write(new byte[newPaddedByteCount - encoded.Length]);
+        }
+
+        var originalTailStart = span.DataLocalOffset + span.PaddedByteCount;
+        output.Write(payload, originalTailStart, payload.Length - originalTailStart);
+        return output.ToArray();
+    }
+
+    private static void AdjustUInt16At(byte[] payload, int localOffset, int delta, string context)
+    {
+        if (localOffset < 0 || localOffset + 2 > payload.Length)
+        {
+            throw new CliException($"Cannot normalize {context}: declared block size offset {localOffset} is outside the object payload.");
+        }
+
+        var current = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(localOffset, 2));
+        var next = current + delta;
+        if (next is < 0 or > ushort.MaxValue)
+        {
+            throw new CliException($"Cannot normalize {context}: declared block size would become {next}.");
+        }
+
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(localOffset, 2), unchecked((ushort)next));
+    }
+
+    private static int Align4(int value) => (value + 3) & ~3;
+
     private static bool TryParseVbaColor(string text, out uint value)
     {
         value = 0;
@@ -360,4 +531,6 @@ internal static class ObjectPayloadSerializer
         int PaddedByteCount,
         bool Compressed,
         int? CountLocalOffset);
+
+    private sealed record StringSegment(string PropertyName, string Value, StringSpanInfo Span, int? BlockSizeLocalOffset);
 }
