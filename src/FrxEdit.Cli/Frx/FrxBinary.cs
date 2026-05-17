@@ -1343,13 +1343,27 @@ internal sealed class FrxBinary
 
         if (span.CountOffset is not null)
         {
-            var count = (uint)bytes.Length;
+            // To prevent corruption of subsequent fields in the stream during in-place editing,
+            // we must preserve the original aligned (padded) byte count.
+            // We achieve this by padding the string with null bytes up to the original padded byte count,
+            // and setting the count header to represent the full padded capacity.
+            // Both our inspector and MSForms/VBA will automatically trim trailing nulls.
+            var targetByteCount = span.PaddedByteCount;
+            var count = (uint)targetByteCount;
             if (span.Compressed)
             {
                 count |= 0x8000_0000u;
             }
 
             BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(span.CountOffset.Value, 4), count);
+
+            // Pad the bytes array with nulls to match targetByteCount
+            if (bytes.Length < targetByteCount)
+            {
+                var paddedBytes = new byte[targetByteCount];
+                bytes.CopyTo(paddedBytes, 0);
+                bytes = paddedBytes;
+            }
         }
         else if (bytes.Length != span.ByteCount)
         {
