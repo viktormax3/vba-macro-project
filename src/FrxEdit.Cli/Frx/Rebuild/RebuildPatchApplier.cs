@@ -14,7 +14,8 @@ internal static class RebuildPatchApplier
 
     private static readonly HashSet<string> FormSitePropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "tabIndex"
+        "tabIndex",
+        "controlTipText"
     };
 
     public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false)
@@ -22,7 +23,8 @@ internal static class RebuildPatchApplier
         ValidateObjectPatch(patch, allowFormSitePatch);
 
         if ((patch.Properties is null || patch.Properties.Count == 0) &&
-            (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0))
+            (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0) &&
+            (!allowFormSitePatch || patch.Renames is null || patch.Renames.Count == 0))
         {
             return source;
         }
@@ -36,19 +38,46 @@ internal static class RebuildPatchApplier
             ? patch.Layout?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase);
 
+        var renameByName = allowFormSitePatch
+            ? patch.Renames?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         var controls = new List<ControlInfo>(source.Controls.Count);
         foreach (var control in source.Controls)
         {
+            renameByName.TryGetValue(control.Name, out var newName);
             patchedByName.TryGetValue(control.Name, out var requested);
             layoutByName.TryGetValue(control.Name, out var layout);
 
-            if (requested is null && layout is null)
+            if (!string.IsNullOrWhiteSpace(newName))
+            {
+                if (requested is null)
+                {
+                    patchedByName.TryGetValue(newName, out requested);
+                }
+
+                if (layout is null)
+                {
+                    layoutByName.TryGetValue(newName, out layout);
+                }
+            }
+
+            if (requested is null && layout is null && string.IsNullOrWhiteSpace(newName))
             {
                 controls.Add(control);
                 continue;
             }
 
-            controls.Add(ApplyToControl(control, requested, layout));
+            controls.Add(ApplyToControl(control, requested, layout, newName));
+        }
+
+        if (renameByName.Count > 0)
+        {
+            controls = controls
+                .Select(control => control.Parent is not null && renameByName.TryGetValue(control.Parent, out var renamedParent)
+                    ? control with { Parent = renamedParent }
+                    : control)
+                .ToList();
         }
 
         return source with { Controls = controls };
@@ -61,9 +90,9 @@ internal static class RebuildPatchApplier
             throw new CliException("Rebuild object-patch does not support 'add' yet. Add/remove controls requires FormSiteData rebuild.");
         }
 
-        if (patch.Renames is { Count: > 0 })
+        if (patch.Renames is { Count: > 0 } && !allowFormSitePatch)
         {
-            throw new CliException("Rebuild object-patch does not support 'renames' yet because control names live in FormSiteData. Use the in-place editor for short renames, or wait for f-stream rebuild.");
+            throw new CliException("Rebuild object-patch does not support 'renames' because control names live in FormSiteData. Use '--stream-mode full-patch' for rebuild renames.");
         }
 
         if (patch.Layout is { Count: > 0 } && !allowFormSitePatch)
@@ -84,7 +113,7 @@ internal static class RebuildPatchApplier
         }
     }
 
-    private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout)
+    private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout, string? newName)
     {
         if (control.Properties is null)
         {
@@ -101,6 +130,13 @@ internal static class RebuildPatchApplier
                 case "groupname":
                 case "fontname":
                     props[CanonicalPropertyName(propertyName)] = RequireString(control.Name, propertyName, value);
+                    break;
+                case "controltiptext":
+                    if (!props.ContainsKey("controlTipTextSpan"))
+                    {
+                        throw new CliException($"Cannot patch '{control.Name}.controlTipText': this control does not expose a documented controlTipTextSpan in FormSiteData.");
+                    }
+                    props["controlTipText"] = RequireString(control.Name, propertyName, value);
                     break;
                 case "backcolor":
                 case "forecolor":
@@ -133,8 +169,22 @@ internal static class RebuildPatchApplier
             rawHeight = layout.RawHeight ?? layout.Height ?? ToRawPoints(layout.HeightPt) ?? rawHeight;
         }
 
+        var effectiveName = string.IsNullOrWhiteSpace(newName) ? control.Name : newName.Trim();
+        if (!effectiveName.Equals(control.Name, StringComparison.Ordinal))
+        {
+            if (!props.ContainsKey("nameSpan"))
+            {
+                throw new CliException($"Cannot rename '{control.Name}': this control does not expose a documented nameSpan in FormSiteData.");
+            }
+
+            props["name"] = effectiveName;
+            props["nameRaw"] = effectiveName;
+            props["siteName"] = effectiveName;
+        }
+
         return control with
         {
+            Name = effectiveName,
             Left = left,
             Top = top,
             RawWidth = rawWidth,
@@ -160,6 +210,7 @@ internal static class RebuildPatchApplier
         {
             "groupname" => "groupName",
             "fontname" => "fontName",
+            "controltiptext" => "controlTipText",
             "backcolor" => "backColor",
             "forecolor" => "foreColor",
             "bordercolor" => "borderColor",

@@ -149,12 +149,14 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
         File.WriteAllBytes(outFrxPath, rebuiltBytes);
 
-        var updatedFrm = UserFormProject.ReplaceOleObjectBlob(project.FrmText, Path.GetFileName(outFrxPath));
+        var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
+        updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
-        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, null);
+        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames);
 
-        var rebuilt = FrxBinary.Read(outFrxPath);
-        var rebuiltLayout = rebuilt.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var rebuiltProject = UserFormProject.Load(outFrmPath);
+        var rebuilt = FrxBinary.Read(rebuiltProject.FrxPath);
+        var rebuiltLayout = rebuilt.Inspect(rebuiltProject.KnownControlNames, rebuiltProject.ControlScopes, parserMode);
         var comparison = RebuildComparison.From(targetLayout, rebuiltLayout);
 
         stdout.WriteLine($"Wrote {outFrmPath}");
