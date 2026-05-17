@@ -29,3 +29,7 @@ property_test.patch.json
 UserForm1.inspect.old.json
 UserForm1.inspect.raw.old.json
 userformallcontrol.inspect.old.json
+
+# Prevent accidental root-level json and zip tracking
+/*.json
+/*.zip
