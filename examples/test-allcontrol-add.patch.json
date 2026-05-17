@@ -1,0 +1,55 @@
+{
+  "layout": {
+    "CommandButton1": {
+      "leftPt": 10,
+      "topPt": 10,
+      "widthPt": 100,
+      "heightPt": 25
+    }
+  },
+  "properties": {
+    "CommandButton1": {
+      "caption": "Boton Original Modificado"
+    }
+  },
+  "add": [
+    {
+      "fromTemplate": "CommandButton2",
+      "name": "CommandButtonNew",
+      "leftPt": 20,
+      "topPt": 150,
+      "widthPt": 90,
+      "heightPt": 24,
+      "caption": "Boton Raiz Nuevo",
+      "properties": {
+        "fontSize": 9,
+        "backColor": "&H004080FF&",
+        "foreColor": "&H00FFFFFF&"
+      }
+    },
+    {
+      "fromTemplate": "TextBox2",
+      "name": "TextBoxNew",
+      "leftPt": 10,
+      "topPt": 40,
+      "widthPt": 80,
+      "heightPt": 18,
+      "caption": "Texto Nuevo en Frame",
+      "properties": {
+        "fontSize": 9
+      }
+    },
+    {
+      "fromTemplate": "CheckBox2",
+      "name": "CheckBoxNew",
+      "leftPt": 12,
+      "topPt": 50,
+      "widthPt": 70,
+      "heightPt": 16,
+      "caption": "Check Nuevo en Multipage",
+      "properties": {
+        "fontSize": 9
+      }
+    }
+  ]
+}
