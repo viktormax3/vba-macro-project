@@ -1089,8 +1089,14 @@ internal static class ObjectStreamParser
         }
 
         var cbCommandButton = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
+        if (cbCommandButton < 4 || 4 + cbCommandButton > data.Length)
+        {
+            return null;
+        }
+
         var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4));
         var cursor = 8;
+        var declaredBlockEnd = 4 + cbCommandButton;
         var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
             ["objectStreamSize"] = stream.Size,
@@ -1100,6 +1106,8 @@ internal static class ObjectStreamParser
             ["cbCommandButton"] = cbCommandButton,
             ["commandButtonPropMask"] = $"0x{propMask:X8}",
             ["commandButtonPropMaskOffset"] = stream.FileOffsets[4],
+            ["commandButtonDeclaredEndLocalOffset"] = declaredBlockEnd,
+            ["commandButtonDeclaredEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, declaredBlockEnd),
         };
 
         CountOfBytesWithCompressionFlag? captionCount = null;
@@ -1151,6 +1159,17 @@ internal static class ObjectStreamParser
         }
 
         MsFormsBinary.Align(ref cursor, 4);
+        if (cursor > declaredBlockEnd)
+        {
+            properties["commandButtonBlockWarning"] = $"Parsed DataBlock/ExtraDataBlock cursor {cursor} exceeds declared end {declaredBlockEnd}.";
+        }
+        else
+        {
+            // cbCommandButton is the documented boundary between DataBlock/ExtraDataBlock and
+            // StreamData.  This also accounts for optional bit-only properties such as
+            // TakeFocusOnClick, which change the mask but do not add bytes to the DataBlock.
+            cursor = declaredBlockEnd;
+        }
 
         // CommandButtonControl order is:
         // Header + PropMask/DataBlock/ExtraDataBlock (cbCommandButton)

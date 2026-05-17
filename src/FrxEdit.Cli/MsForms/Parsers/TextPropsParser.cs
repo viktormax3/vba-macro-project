@@ -38,10 +38,12 @@ internal static class TextPropsParser
         properties["textPropsCb"] = cbTextProps;
         properties["textPropsPropMask"] = $"0x{propMask:X8}";
         properties["textPropsPropMaskOffset"] = fileOffsets[offset + 4];
+        properties["textPropsDeclaredEndLocalOffset"] = blockEnd;
+        properties["textPropsDeclaredEndOffset"] = MsFormsBinary.EndOffsetAt(fileOffsets, blockEnd);
 
         if (MsFormsBinary.HasBit(propMask, 0))
         {
-            MsFormsBinary.Align(ref cursor, 4);
+            AlignRelative(ref cursor, offset, 4);
             if (cursor + 4 > blockEnd)
             {
                 return false;
@@ -54,14 +56,13 @@ internal static class TextPropsParser
             properties["fontNameCompressed"] = fontNameCount.Value.Compressed;
             properties["fontNamePaddedByteCount"] = MsFormsBinary.Align4(fontNameCount.Value.Count);
             properties["fontNameCountLocalOffset"] = countOffset;
-            properties["fontNameCountOffset"] = fileOffsets[cursor];
+            properties["fontNameCountOffset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
             cursor += 4;
         }
 
         if (MsFormsBinary.HasBit(propMask, 1))
         {
-            MsFormsBinary.ReadAlignedUInt32(data, fileOffsets, ref cursor, 4, "fontEffects", properties);
-            var effects = Convert.ToUInt32(properties["fontEffects"]);
+            var effects = ReadRelativeAlignedUInt32(data, fileOffsets, ref cursor, offset, 4, "fontEffects", properties);
             properties["fontEffectsHex"] = $"0x{effects:X8}";
             properties["fontItalic"] = MsFormsBinary.HasBit(effects, 1);
             properties["fontUnderline"] = MsFormsBinary.HasBit(effects, 2);
@@ -70,7 +71,7 @@ internal static class TextPropsParser
 
         if (MsFormsBinary.HasBit(propMask, 2))
         {
-            var rawHeight = MsFormsBinary.ReadAlignedUInt32(data, fileOffsets, ref cursor, 4, "fontHeightRaw", properties);
+            var rawHeight = ReadRelativeAlignedUInt32(data, fileOffsets, ref cursor, offset, 4, "fontHeightRaw", properties);
             properties["fontSize"] = Math.Round(rawHeight / 20.0, 2);
             properties["fontSizeRaw"] = (int)rawHeight;
             properties["fontSizeOffset"] = properties["fontHeightRawOffset"];
@@ -93,10 +94,10 @@ internal static class TextPropsParser
 
         if (MsFormsBinary.HasBit(propMask, 7))
         {
-            MsFormsBinary.ReadAlignedUInt16(data, fileOffsets, ref cursor, "fontWeight", properties);
+            ReadRelativeAlignedUInt16(data, fileOffsets, ref cursor, offset, "fontWeight", properties);
         }
 
-        MsFormsBinary.Align(ref cursor, 4);
+        AlignRelative(ref cursor, offset, 4);
         if (cursor > blockEnd)
         {
             return false;
@@ -104,7 +105,8 @@ internal static class TextPropsParser
 
         if (fontNameCount is not null)
         {
-            if (cursor + fontNameCount.Value.Count > data.Length)
+            var paddedFontNameBytes = MsFormsBinary.Align4(fontNameCount.Value.Count);
+            if (cursor + paddedFontNameBytes > blockEnd)
             {
                 return false;
             }
@@ -115,18 +117,65 @@ internal static class TextPropsParser
                 : -1;
             MsFormsBinary.AddStringSpan(properties, "fontName", fontNameCount.Value, countOffset, cursor, fileOffsets);
             cursor += fontNameCount.Value.Count;
-            MsFormsBinary.Align(ref cursor, 4);
+            AlignRelative(ref cursor, offset, 4);
         }
+
+        properties["textPropsParsedEndLocalOffset"] = cursor;
+        properties["textPropsParsedEndOffset"] = MsFormsBinary.EndOffsetAt(fileOffsets, cursor);
 
         if (cursor != blockEnd)
         {
-            properties["textPropsParsedEndLocalOffset"] = cursor;
             properties["textPropsExpectedEndLocalOffset"] = blockEnd;
             properties["textPropsWarning"] = "Parsed TextProps length differs from cbTextProps.";
         }
 
         endOffset = blockEnd;
         return true;
+    }
+
+    private static void AlignRelative(ref int cursor, int baseOffset, int alignment)
+    {
+        var relative = cursor - baseOffset;
+        var remainder = relative % alignment;
+        if (remainder != 0)
+        {
+            cursor += alignment - remainder;
+        }
+    }
+
+    private static uint ReadRelativeAlignedUInt32(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        int baseOffset,
+        int alignment,
+        string property,
+        Dictionary<string, object?> properties)
+    {
+        AlignRelative(ref cursor, baseOffset, alignment);
+        var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
+        properties[property] = value;
+        properties[$"{property}LocalOffset"] = cursor;
+        properties[$"{property}Offset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
+        cursor += 4;
+        return value;
+    }
+
+    private static ushort ReadRelativeAlignedUInt16(
+        byte[] data,
+        int[] fileOffsets,
+        ref int cursor,
+        int baseOffset,
+        string property,
+        Dictionary<string, object?> properties)
+    {
+        AlignRelative(ref cursor, baseOffset, 2);
+        var value = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
+        properties[property] = value;
+        properties[$"{property}LocalOffset"] = cursor;
+        properties[$"{property}Offset"] = MsFormsBinary.OffsetAt(fileOffsets, cursor);
+        cursor += 2;
+        return value;
     }
 
     public static void AddHeuristic(byte[] data, int[] fileOffsets, Dictionary<string, object?> properties)
