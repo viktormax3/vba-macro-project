@@ -115,6 +115,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var frmPath = Path.GetFullPath(parsed.Positionals[0]);
         var outFrmPath = Path.GetFullPath(parsed.RequireOption("out"));
         var parserMode = parsed.GetParserModeOption("mode", ParserMode.Strict);
+        var streamMode = ParseRebuildStreamMode(parsed.GetOption("stream-mode"));
 
         var project = UserFormProject.Load(frmPath);
         var source = FrxBinary.Read(project.FrxPath);
@@ -122,7 +123,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         // Validate the source first. This keeps the first rebuilder pass deliberately conservative:
         // it only round-trips FRX files that the documented parser already understands.
         var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
-        var rebuiltBytes = FrxRebuilder.RebuildContainer(source);
+        var rebuiltBytes = FrxRebuilder.RebuildContainer(source, sourceLayout, streamMode);
 
         var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
         Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
@@ -139,6 +140,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine($"Wrote {outFrmPath}");
         stdout.WriteLine($"Wrote {outFrxPath}");
         stdout.WriteLine($"OK: rebuilt CFB container and validated with parser mode {parserMode.ToString().ToLowerInvariant()}");
+        stdout.WriteLine($"OK: rebuild stream mode {FormatRebuildStreamMode(streamMode)}");
         stdout.WriteLine($"OK: controls {comparison.SourceControlCount} -> {comparison.RebuiltControlCount}, semantic match: {comparison.SemanticMatch}");
 
         if (parsed.GetOption("report-out") is { } reportOut)
@@ -148,6 +150,26 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         return 0;
     }
+
+
+    private static RebuildStreamMode ParseRebuildStreamMode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Equals("container", StringComparison.OrdinalIgnoreCase))
+        {
+            return RebuildStreamMode.ContainerOnly;
+        }
+
+        if (value.Equals("object-roundtrip", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("o-roundtrip", StringComparison.OrdinalIgnoreCase))
+        {
+            return RebuildStreamMode.ObjectStreamRoundTrip;
+        }
+
+        throw new CliException("Option '--stream-mode' must be one of: container, object-roundtrip.");
+    }
+
+    private static string FormatRebuildStreamMode(RebuildStreamMode mode) =>
+        mode == RebuildStreamMode.ObjectStreamRoundTrip ? "object-roundtrip" : "container";
 
     private int Validate(string[] args)
     {
@@ -224,8 +246,8 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");
-        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--report-out rebuild.report.json]");
-        stdout.WriteLine("  rebuild pass 1 regenerates the OLE/CFB container while preserving logical stream bytes, then validates the result.");
+        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip] [--report-out rebuild.report.json]");
+        stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip also reconstructs o streams from parser-identified object slices.");
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");
