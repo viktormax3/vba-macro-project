@@ -20,7 +20,10 @@ internal static class FormStreamParser
                 StructuredMsFormsParser.EnrichFromObjectStream(sites, objectStream);
             }
 
-            return sites.Select(s => MapToRecord(s, stream, objectStream)).ToList();
+            return sites
+                .Where(s => !s.IsInternalSite)
+                .Select(s => MapToRecord(s, stream, objectStream))
+                .ToList();
         }
 
         if (IsDocumentedEmptyParentStorage(stream, objectStream))

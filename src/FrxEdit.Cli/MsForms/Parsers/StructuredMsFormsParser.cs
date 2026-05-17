@@ -108,14 +108,18 @@ internal static class StructuredMsFormsParser
 
         if (sites.Count > 0)
         {
-            var validationTarget = sites.First();
-            validationTarget.ExtraProperties["objectStreamConsumedBytes"] = cursor;
-            validationTarget.ExtraProperties["objectStreamLength"] = data.Length;
-            validationTarget.ExtraProperties["objectStreamSizeValidation"] = cursor == data.Length
+            var validation = cursor == data.Length
                 ? "exact"
                 : cursor < data.Length
                     ? $"under-consumed by {data.Length - cursor} bytes"
                     : $"over-consumed by {cursor - data.Length} bytes";
+
+            foreach (var site in sites)
+            {
+                site.ExtraProperties["objectStreamConsumedBytes"] = cursor;
+                site.ExtraProperties["objectStreamLength"] = data.Length;
+                site.ExtraProperties["objectStreamSizeValidation"] = validation;
+            }
         }
     }
 
@@ -198,11 +202,13 @@ internal static class StructuredMsFormsParser
             return false;
         }
 
-        var validNameCount = sites.Count(s => !string.IsNullOrWhiteSpace(s.Name));
+        var emittedSiteCount = sites.Count(s => !s.IsInternalSite);
+        var validNameCount = sites.Count(s => s.IsInternalSite || !string.IsNullOrWhiteSpace(s.Name));
         var knownTypeCount = sites.Count(s => IsKnownOrClassTableType(s.ClsidCacheIndex, classTable));
         var plausiblePositionCount = sites.Count(s => s.Left is >= -200_000 and <= 200_000 && s.Top is >= -200_000 and <= 200_000);
-        var score = validNameCount * 10 + knownTypeCount * 10 + plausiblePositionCount * 5 + sites.Count;
-        if (validNameCount != sites.Count || knownTypeCount != sites.Count)
+        var internalSiteBonus = sites.Count(s => s.IsInternalSite) * 3;
+        var score = validNameCount * 10 + knownTypeCount * 10 + plausiblePositionCount * 5 + emittedSiteCount + internalSiteBonus;
+        if (emittedSiteCount == 0 || validNameCount != sites.Count || knownTypeCount != sites.Count)
         {
             return false;
         }
@@ -299,7 +305,7 @@ internal static class StructuredMsFormsParser
         }
 
         var mask = new SitePropMask(propMaskValue);
-        if (!mask.HasName || !mask.HasPosition || !mask.HasClsidCacheIndex)
+        if (!mask.HasPosition || !mask.HasClsidCacheIndex)
         {
             return false;
         }
@@ -534,7 +540,20 @@ internal static class StructuredMsFormsParser
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(site.Name) || !IsKnownOrClassTableType(site.ClsidCacheIndex, classTable))
+        var isInternalUnnamedSite = string.IsNullOrWhiteSpace(site.Name) &&
+            !mask.HasName &&
+            site.ObjectStreamSize is > 0 &&
+            IsKnownOrClassTableType(site.ClsidCacheIndex, classTable);
+
+        if (isInternalUnnamedSite)
+        {
+            site.IsInternalSite = true;
+            site.Name = $"__internal_site_{site.SiteIndex}_{ResolveControlType(site.ClsidCacheIndex)}";
+            site.ExtraProperties["internalSite"] = true;
+            site.ExtraProperties["internalSiteReason"] = "unnamed object-stream site";
+        }
+
+        if ((!isInternalUnnamedSite && string.IsNullOrWhiteSpace(site.Name)) || !IsKnownOrClassTableType(site.ClsidCacheIndex, classTable))
         {
             return false;
         }

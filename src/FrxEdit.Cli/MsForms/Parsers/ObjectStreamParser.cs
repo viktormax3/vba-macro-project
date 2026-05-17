@@ -453,6 +453,10 @@ internal static class ObjectStreamParser
 
         var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
+            ["objectStreamSize"] = stream.Size,
+            ["minorVersion"] = data[0],
+            ["majorVersion"] = data[1],
+            ["cbTabStrip"] = cbTab,
             ["parser"] = "msOFormsTabStrip",
             ["propMask"] = $"0x{propMask:X8}",
         };
@@ -480,7 +484,7 @@ internal static class ObjectStreamParser
         if (MsFormsBinary.HasBit(propMask, 19)) { properties["tabsAllocated"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
         if (MsFormsBinary.HasBit(propMask, 20)) { properties["tagsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
         if (MsFormsBinary.HasBit(propMask, 21)) { properties["acceleratorsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 22)) properties["helpContextIdsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); 
+        if (MsFormsBinary.HasBit(propMask, 22)) { properties["helpContextIdsSize"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
         if (MsFormsBinary.HasBit(propMask, 23)) { properties["mouseIcon"] = 0xFFFF; cursor += 2; MsFormsBinary.Align(ref cursor, 4); }
 
         int? width = null;

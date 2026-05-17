@@ -43,6 +43,11 @@ internal sealed class SiteDescriptor
     public int BitFlagsOffset { get; set; }
 
     public string? ControlType { get; set; }
+
+    // Some parent controls, notably MultiPage, can persist an internal child site
+    // used to consume the parent object stream (for example the internal TabStrip).
+    // These sites are part of the object-stream ordering contract but are not user controls.
+    public bool IsInternalSite { get; set; }
     
     public int ObjectStreamLocalOffset { get; set; } = -1;
     public long ObjectStreamFileOffset { get; set; }
