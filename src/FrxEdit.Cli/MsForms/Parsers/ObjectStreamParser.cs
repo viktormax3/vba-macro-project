@@ -110,102 +110,65 @@ internal static class ObjectStreamParser
     private static ObjectStreamProperties? TryReadLabel(StorageEntryDump stream)
     {
         var data = stream.Data;
-        if (data.Length < 8) return null;
+        if (data.Length < 8 || data[0] != 0x00 || data[1] != 0x02) return null;
 
         int cursor = 0;
-        var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-        cursor += 2;
+        var minorVersion = data[cursor++];
+        var majorVersion = data[cursor++];
         var cbLabel = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
         cursor += 2;
+        var declaredBlockEnd = 4 + cbLabel;
+        if (cbLabel < 4 || declaredBlockEnd > data.Length) return null;
 
-        // LabelPropMask is 4 bytes
         var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
         cursor += 4;
 
         var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
+            ["objectStreamSize"] = stream.Size,
             ["parser"] = "msOFormsLabel",
+            ["minorVersion"] = minorVersion,
+            ["majorVersion"] = majorVersion,
+            ["cbLabel"] = cbLabel,
+            ["labelDeclaredEndLocalOffset"] = declaredBlockEnd,
+            ["labelDeclaredEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, declaredBlockEnd),
             ["propMask"] = $"0x{propMask:X8}",
         };
 
-        // DataBlock (4 bytes or smaller)
-        if (MsFormsBinary.HasBit(propMask, 0)) // fForeColor
-        {
-            properties["foreColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        }
-        if (MsFormsBinary.HasBit(propMask, 1)) // fBackColor
-        {
-            properties["backColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        }
-        if (MsFormsBinary.HasBit(propMask, 2)) // fVariousPropertyBits
-        {
-            var various = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-            properties["variousPropertyBitsRaw"] = various;
-            MsFormsBinary.AddVariousPropertyBits(properties, various);
-            cursor += 4;
-        }
-        if (MsFormsBinary.HasBit(propMask, 3)) // fCaption (ExtraData count)
-        {
-            properties["captionCountLocalOffset"] = cursor;
-            properties["captionCountOffset"] = stream.FileOffsets[cursor];
-            properties["captionCount"] = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-            cursor += 4;
-        }
-        if (MsFormsBinary.HasBit(propMask, 4)) // fPicturePosition
-        {
-            properties["picturePosition"] = data[cursor++];
-            MsFormsBinary.Align(ref cursor, 4);
-        }
-        if (MsFormsBinary.HasBit(propMask, 5)) // fSize (ExtraData Width/Height)
-        {
-            // Just mark it, ExtraDataBlock reads it.
-        }
-        if (MsFormsBinary.HasBit(propMask, 6)) // fMousePointer
-        {
-            properties["mousePointer"] = data[cursor++];
-            MsFormsBinary.Align(ref cursor, 4);
-        }
-        if (MsFormsBinary.HasBit(propMask, 7)) // fBorderColor
-        {
-            properties["borderColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        }
-        if (MsFormsBinary.HasBit(propMask, 8)) // fBorderStyle
-        {
-            properties["borderStyle"] = data[cursor++];
-            MsFormsBinary.Align(ref cursor, 4);
-        }
-        if (MsFormsBinary.HasBit(propMask, 9)) // fSpecialEffect
-        {
-            properties["specialEffect"] = data[cursor++];
-            MsFormsBinary.Align(ref cursor, 4);
-        }
-        if (MsFormsBinary.HasBit(propMask, 10)) // fPicture
-        {
-            properties["picture"] = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-            cursor += 2;
-            MsFormsBinary.Align(ref cursor, 4);
-        }
-        if (MsFormsBinary.HasBit(propMask, 11)) // fAccelerator
-        {
-            properties["accelerator"] = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-            cursor += 2;
-            MsFormsBinary.Align(ref cursor, 4);
-        }
-        if (MsFormsBinary.HasBit(propMask, 12)) // fMouseIcon
-        {
-            properties["mouseIcon"] = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-            cursor += 2;
-            MsFormsBinary.Align(ref cursor, 4);
-        }
+        CountOfBytesWithCompressionFlag? captionCount = null;
+        var captionCountLocalOffset = -1;
 
-        // ExtraDataBlock
-        if (MsFormsBinary.HasBit(propMask, 3)) // fCaption
+        // LabelDataBlock.  2-byte fields are aligned to 2; 4-byte fields to 4.  Do not treat
+        // PicturePosition/BorderStyle/SpecialEffect as one-byte fields; doing so shifts StreamData.
+        if (MsFormsBinary.HasBit(propMask, 0)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "foreColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 1)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 2))
         {
-            var count = (uint)properties["captionCount"]!;
-            var captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(count);
-            properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount);
-            MsFormsBinary.AddStringSpan(properties, "caption", captionCount, LocalOffsetOf(properties, "captionCount"), cursor, stream.FileOffsets);
-            cursor += MsFormsBinary.Align4(captionCount.Count);
+            var various = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "variousPropertyBitsRaw", properties);
+            MsFormsBinary.AddVariousPropertyBits(properties, various);
+        }
+        if (MsFormsBinary.HasBit(propMask, 3))
+        {
+            captionCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "captionCount", properties));
+            captionCountLocalOffset = LocalOffsetOf(properties, "captionCount");
+        }
+        if (MsFormsBinary.HasBit(propMask, 4)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "picturePosition", properties);
+        if (MsFormsBinary.HasBit(propMask, 6)) properties["mousePointer"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "mousePointer", properties);
+        if (MsFormsBinary.HasBit(propMask, 7)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "borderColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 8)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "borderStyle", properties);
+        if (MsFormsBinary.HasBit(propMask, 9)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "specialEffect", properties);
+        if (MsFormsBinary.HasBit(propMask, 10)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "pictureMarker", properties);
+        if (MsFormsBinary.HasBit(propMask, 11)) properties["accelerator"] = (char)MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "acceleratorCode", properties);
+        if (MsFormsBinary.HasBit(propMask, 12)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "mouseIconMarker", properties);
+
+        MsFormsBinary.Align(ref cursor, 4);
+
+        // LabelExtraDataBlock is included in cbLabel.
+        if (captionCount is not null)
+        {
+            properties["caption"] = MsFormsBinary.ReadFmString(data, cursor, captionCount.Value);
+            MsFormsBinary.AddStringSpan(properties, "caption", captionCount.Value, captionCountLocalOffset, cursor, stream.FileOffsets);
+            cursor += MsFormsBinary.Align4(captionCount.Value.Count);
         }
 
         int? width = null;
@@ -216,6 +179,7 @@ internal static class ObjectStreamParser
         if (MsFormsBinary.HasBit(propMask, 5)) // fSize
         {
             MsFormsBinary.Align(ref cursor, 4);
+            if (cursor + 8 > declaredBlockEnd) return null;
             widthOffset = stream.FileOffsets[cursor];
             width = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
             cursor += 4;
@@ -225,11 +189,51 @@ internal static class ObjectStreamParser
             properties["sizeSource"] = "labelExtraDataBlock";
         }
 
+        MsFormsBinary.Align(ref cursor, 4);
+        if (cursor > declaredBlockEnd)
+        {
+            properties["labelBlockWarning"] = $"Parsed DataBlock/ExtraDataBlock cursor {cursor} exceeds declared end {declaredBlockEnd}.";
+        }
+        else
+        {
+            cursor = declaredBlockEnd;
+        }
+
+        // LabelControl order is DataBlock/ExtraDataBlock, then StreamData, then TextProps.
+        if (MsFormsBinary.HasBit(propMask, 10) || MsFormsBinary.HasBit(propMask, 12))
+        {
+            properties["labelStreamDataLocalOffset"] = cursor;
+            properties["labelStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+        }
+        if (MsFormsBinary.HasBit(propMask, 10))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "picture", properties))
+                properties["pictureStreamWarning"] = $"Could not parse LabelStreamData.Picture at local offset {cursor}.";
+        }
+        if (MsFormsBinary.HasBit(propMask, 12))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "mouseIcon", properties))
+                properties["mouseIconStreamWarning"] = $"Could not parse LabelStreamData.MouseIcon at local offset {cursor}.";
+        }
+        if (MsFormsBinary.HasBit(propMask, 10) || MsFormsBinary.HasBit(propMask, 12))
+        {
+            properties["labelStreamDataEndLocalOffset"] = cursor;
+            properties["labelStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
+        }
+
         if (cursor < data.Length)
         {
+            properties["textPropsExpectedLocalOffset"] = cursor;
+            properties["textPropsExpectedOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
             if (!TextPropsParser.TryRead(data, stream.FileOffsets, cursor, properties, out var textPropsEnd))
             {
                 TextPropsParser.AddHeuristic(data, stream.FileOffsets, properties);
+            }
+            else
+            {
+                cursor = textPropsEnd;
+                properties["textPropsEndLocalOffset"] = cursor;
+                properties["textPropsEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
             }
         }
 
@@ -423,41 +427,48 @@ internal static class ObjectStreamParser
     private static ObjectStreamProperties? TryReadScrollBar(StorageEntryDump stream)
     {
         var data = stream.Data;
-        if (data.Length < 8) return null;
+        if (data.Length < 8 || data[0] != 0x00 || data[1] != 0x02) return null;
 
         int cursor = 0;
-        var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-        cursor += 2;
+        var minorVersion = data[cursor++];
+        var majorVersion = data[cursor++];
         var cbScroll = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
         cursor += 2;
+        var declaredBlockEnd = 4 + cbScroll;
+        if (cbScroll < 4 || declaredBlockEnd > data.Length) return null;
 
         var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
         cursor += 4;
 
         var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
+            ["objectStreamSize"] = stream.Size,
             ["parser"] = "msOFormsScrollBar",
+            ["minorVersion"] = minorVersion,
+            ["majorVersion"] = majorVersion,
+            ["cbScrollBar"] = cbScroll,
+            ["scrollBarDeclaredEndLocalOffset"] = declaredBlockEnd,
+            ["scrollBarDeclaredEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, declaredBlockEnd),
             ["propMask"] = $"0x{propMask:X8}",
         };
 
-        if (MsFormsBinary.HasBit(propMask, 0)) properties["foreColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        if (MsFormsBinary.HasBit(propMask, 1)) properties["backColor"] = MsFormsBinary.ReadColor(data, ref cursor);
+        if (MsFormsBinary.HasBit(propMask, 0)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "foreColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 1)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, formatColor: true);
         if (MsFormsBinary.HasBit(propMask, 2))
         {
-            var various = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-            properties["variousPropertyBitsRaw"] = various;
+            var various = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "variousPropertyBitsRaw", properties);
             MsFormsBinary.AddVariousPropertyBits(properties, various);
-            cursor += 4;
         }
-        if (MsFormsBinary.HasBit(propMask, 4)) { properties["mousePointer"] = data[cursor++]; MsFormsBinary.Align(ref cursor, 4); }
-        if (MsFormsBinary.HasBit(propMask, 5)) { properties["min"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 6)) { properties["max"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 7)) { properties["position"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 11)) { properties["smallChange"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 12)) { properties["largeChange"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 13)) { properties["orientation"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 14)) { properties["proportionalThumb"] = data[cursor++] != 0; MsFormsBinary.Align(ref cursor, 4); }
-        if (MsFormsBinary.HasBit(propMask, 15)) { properties["mouseIcon"] = 0xFFFF; cursor += 2; MsFormsBinary.Align(ref cursor, 4); }
+        if (MsFormsBinary.HasBit(propMask, 4)) properties["mousePointer"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "mousePointer", properties);
+        if (MsFormsBinary.HasBit(propMask, 5)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "min", properties);
+        if (MsFormsBinary.HasBit(propMask, 6)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "max", properties);
+        if (MsFormsBinary.HasBit(propMask, 7)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "position", properties);
+        if (MsFormsBinary.HasBit(propMask, 11)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "smallChange", properties);
+        if (MsFormsBinary.HasBit(propMask, 12)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "largeChange", properties);
+        if (MsFormsBinary.HasBit(propMask, 13)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "orientation", properties);
+        if (MsFormsBinary.HasBit(propMask, 14)) properties["proportionalThumb"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "proportionalThumbRaw", properties) != 0;
+        if (MsFormsBinary.HasBit(propMask, 15)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "delay", properties);
+        if (MsFormsBinary.HasBit(propMask, 16)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "mouseIconMarker", properties);
 
         int? width = null;
         int? height = null;
@@ -467,6 +478,7 @@ internal static class ObjectStreamParser
         if (MsFormsBinary.HasBit(propMask, 3)) // fSize
         {
             MsFormsBinary.Align(ref cursor, 4);
+            if (cursor + 8 > declaredBlockEnd) return null;
             widthOffset = stream.FileOffsets[cursor];
             width = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
             cursor += 4;
@@ -476,46 +488,76 @@ internal static class ObjectStreamParser
             properties["sizeSource"] = "scrollBarExtraDataBlock";
         }
 
+        MsFormsBinary.Align(ref cursor, 4);
+        if (cursor > declaredBlockEnd)
+        {
+            properties["scrollBarBlockWarning"] = $"Parsed DataBlock/ExtraDataBlock cursor {cursor} exceeds declared end {declaredBlockEnd}.";
+        }
+        else
+        {
+            cursor = declaredBlockEnd;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 16))
+        {
+            properties["scrollBarStreamDataLocalOffset"] = cursor;
+            properties["scrollBarStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "mouseIcon", properties))
+                properties["mouseIconStreamWarning"] = $"Could not parse ScrollBarStreamData.MouseIcon at local offset {cursor}.";
+            properties["scrollBarStreamDataEndLocalOffset"] = cursor;
+            properties["scrollBarStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
+        }
+        if (cursor != data.Length)
+        {
+            properties["scrollBarStreamWarning"] = $"Parsed ScrollBar ended at {cursor}, but object stream length is {data.Length}.";
+        }
+
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
     }
 
     private static ObjectStreamProperties? TryReadSpinButton(StorageEntryDump stream)
     {
         var data = stream.Data;
-        if (data.Length < 8) return null;
+        if (data.Length < 8 || data[0] != 0x00 || data[1] != 0x02) return null;
 
         int cursor = 0;
-        var version = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
-        cursor += 2;
+        var minorVersion = data[cursor++];
+        var majorVersion = data[cursor++];
         var cbSpin = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(cursor, 2));
         cursor += 2;
+        var declaredBlockEnd = 4 + cbSpin;
+        if (cbSpin < 4 || declaredBlockEnd > data.Length) return null;
 
         var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
         cursor += 4;
 
         var properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
+            ["objectStreamSize"] = stream.Size,
             ["parser"] = "msOFormsSpinButton",
+            ["minorVersion"] = minorVersion,
+            ["majorVersion"] = majorVersion,
+            ["cbSpinButton"] = cbSpin,
+            ["spinButtonDeclaredEndLocalOffset"] = declaredBlockEnd,
+            ["spinButtonDeclaredEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, declaredBlockEnd),
             ["propMask"] = $"0x{propMask:X8}",
         };
 
-        if (MsFormsBinary.HasBit(propMask, 0)) properties["foreColor"] = MsFormsBinary.ReadColor(data, ref cursor);
-        if (MsFormsBinary.HasBit(propMask, 1)) properties["backColor"] = MsFormsBinary.ReadColor(data, ref cursor);
+        if (MsFormsBinary.HasBit(propMask, 0)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "foreColor", properties, formatColor: true);
+        if (MsFormsBinary.HasBit(propMask, 1)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, formatColor: true);
         if (MsFormsBinary.HasBit(propMask, 2))
         {
-            var various = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-            properties["variousPropertyBitsRaw"] = various;
+            var various = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "variousPropertyBitsRaw", properties);
             MsFormsBinary.AddVariousPropertyBits(properties, various);
-            cursor += 4;
         }
-        if (MsFormsBinary.HasBit(propMask, 5)) { properties["min"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 6)) { properties["max"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 7)) { properties["position"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 10)) { properties["smallChange"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 11)) { properties["orientation"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 12)) { properties["delay"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4)); cursor += 4; }
-        if (MsFormsBinary.HasBit(propMask, 13)) { properties["mouseIcon"] = 0xFFFF; cursor += 2; MsFormsBinary.Align(ref cursor, 4); }
-        if (MsFormsBinary.HasBit(propMask, 14)) { properties["mousePointer"] = data[cursor++]; MsFormsBinary.Align(ref cursor, 4); }
+        if (MsFormsBinary.HasBit(propMask, 5)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "min", properties);
+        if (MsFormsBinary.HasBit(propMask, 6)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "max", properties);
+        if (MsFormsBinary.HasBit(propMask, 7)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "position", properties);
+        if (MsFormsBinary.HasBit(propMask, 10)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "smallChange", properties);
+        if (MsFormsBinary.HasBit(propMask, 11)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "orientation", properties);
+        if (MsFormsBinary.HasBit(propMask, 12)) ReadAlignedInt32(data, stream.FileOffsets, ref cursor, "delay", properties);
+        if (MsFormsBinary.HasBit(propMask, 13)) MsFormsBinary.ReadAlignedUInt16(data, stream.FileOffsets, ref cursor, "mouseIconMarker", properties);
+        if (MsFormsBinary.HasBit(propMask, 14)) properties["mousePointer"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "mousePointer", properties);
 
         int? width = null;
         int? height = null;
@@ -525,6 +567,7 @@ internal static class ObjectStreamParser
         if (MsFormsBinary.HasBit(propMask, 3)) // fSize
         {
             MsFormsBinary.Align(ref cursor, 4);
+            if (cursor + 8 > declaredBlockEnd) return null;
             widthOffset = stream.FileOffsets[cursor];
             width = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
             cursor += 4;
@@ -532,6 +575,30 @@ internal static class ObjectStreamParser
             height = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
             cursor += 4;
             properties["sizeSource"] = "spinButtonExtraDataBlock";
+        }
+
+        MsFormsBinary.Align(ref cursor, 4);
+        if (cursor > declaredBlockEnd)
+        {
+            properties["spinButtonBlockWarning"] = $"Parsed DataBlock/ExtraDataBlock cursor {cursor} exceeds declared end {declaredBlockEnd}.";
+        }
+        else
+        {
+            cursor = declaredBlockEnd;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 13))
+        {
+            properties["spinButtonStreamDataLocalOffset"] = cursor;
+            properties["spinButtonStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "mouseIcon", properties))
+                properties["mouseIconStreamWarning"] = $"Could not parse SpinButtonStreamData.MouseIcon at local offset {cursor}.";
+            properties["spinButtonStreamDataEndLocalOffset"] = cursor;
+            properties["spinButtonStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
+        }
+        if (cursor != data.Length)
+        {
+            properties["spinButtonStreamWarning"] = $"Parsed SpinButton ended at {cursor}, but object stream length is {data.Length}.";
         }
 
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
@@ -636,12 +703,18 @@ internal static class ObjectStreamParser
 
         if (MsFormsBinary.HasBit(propMask, 24))
         {
-            properties["tabStripStreamDataWarning"] = "MouseIcon StreamData is present but GuidAndPicture parsing is not implemented yet.";
+            properties["tabStripStreamDataLocalOffset"] = cursor;
+            properties["tabStripStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "mouseIcon", properties))
+                properties["mouseIconStreamWarning"] = $"Could not parse TabStripStreamData.MouseIcon at local offset {cursor}.";
+            properties["tabStripStreamDataEndLocalOffset"] = cursor;
+            properties["tabStripStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
         }
 
         if (cursor < data.Length)
         {
             properties["textPropsExpectedLocalOffset"] = cursor;
+            properties["textPropsExpectedOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
             if (!TextPropsParser.TryRead(data, stream.FileOffsets, cursor, properties, out var textPropsEnd))
             {
                 TextPropsParser.AddHeuristic(data, stream.FileOffsets, properties);
@@ -650,7 +723,7 @@ internal static class ObjectStreamParser
             {
                 cursor = textPropsEnd;
                 properties["textPropsEndLocalOffset"] = cursor;
-                properties["textPropsEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+                properties["textPropsEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
             }
         }
 
@@ -784,7 +857,7 @@ internal static class ObjectStreamParser
         properties[$"{property}Offset"] = MsFormsBinary.OffsetAt(fileOffsets, start);
         properties[$"{property}ByteCount"] = size;
         properties[$"{property}EndLocalOffset"] = end;
-        properties[$"{property}EndOffset"] = MsFormsBinary.OffsetAt(fileOffsets, end);
+        properties[$"{property}EndOffset"] = MsFormsBinary.EndOffsetAt(fileOffsets, end);
         return true;
     }
 
@@ -945,11 +1018,43 @@ internal static class ObjectStreamParser
             extraCursor += Align4(groupNameCount.Value.Count);
         }
 
-        cursor = Math.Max(extraEnd, extraCursor);
-        MsFormsBinary.Align(ref cursor, 4);
+        if (extraCursor > extraEnd)
+        {
+            properties["morphDataBlockWarning"] = $"Parsed ExtraDataBlock cursor {extraCursor} exceeds declared end {extraEnd}.";
+            cursor = extraCursor;
+        }
+        else
+        {
+            cursor = extraEnd;
+        }
+
+        // MorphDataControl order is DataBlock/ExtraDataBlock, StreamData, TextProps, rgColumnInfo.
+        // StreamData order is MouseIcon, then Picture.
+        if (MsFormsBinary.HasBit64(propMask, 27) || MsFormsBinary.HasBit64(propMask, 28))
+        {
+            properties["morphDataStreamDataLocalOffset"] = cursor;
+            properties["morphDataStreamDataOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
+        }
+        if (MsFormsBinary.HasBit64(propMask, 27))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "mouseIcon", properties))
+                properties["mouseIconStreamWarning"] = $"Could not parse MorphDataStreamData.MouseIcon at local offset {cursor}.";
+        }
+        if (MsFormsBinary.HasBit64(propMask, 28))
+        {
+            if (!TryReadGuidAndPicture(data, stream.FileOffsets, ref cursor, "picture", properties))
+                properties["pictureStreamWarning"] = $"Could not parse MorphDataStreamData.Picture at local offset {cursor}.";
+        }
+        if (MsFormsBinary.HasBit64(propMask, 27) || MsFormsBinary.HasBit64(propMask, 28))
+        {
+            properties["morphDataStreamDataEndLocalOffset"] = cursor;
+            properties["morphDataStreamDataEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
+        }
 
         if (cursor < data.Length)
         {
+            properties["textPropsExpectedLocalOffset"] = cursor;
+            properties["textPropsExpectedOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
             if (!TextPropsParser.TryRead(data, stream.FileOffsets, cursor, properties, out var textPropsEnd))
             {
                 TextPropsParser.AddHeuristic(data, stream.FileOffsets, properties);
@@ -957,6 +1062,8 @@ internal static class ObjectStreamParser
             else
             {
                 cursor = textPropsEnd;
+                properties["textPropsEndLocalOffset"] = cursor;
+                properties["textPropsEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, cursor);
             }
         }
 
@@ -986,7 +1093,7 @@ internal static class ObjectStreamParser
                 properties["columnInfoLocalOffset"] = cursor;
                 properties["columnInfoOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, cursor);
                 properties["columnInfoEndLocalOffset"] = columnCursor;
-                properties["columnInfoEndOffset"] = MsFormsBinary.OffsetAt(stream.FileOffsets, Math.Min(columnCursor, stream.FileOffsets.Length - 1));
+                properties["columnInfoEndOffset"] = MsFormsBinary.EndOffsetAt(stream.FileOffsets, columnCursor);
                 cursor = columnCursor;
             }
         }
