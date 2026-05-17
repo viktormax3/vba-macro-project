@@ -1,0 +1,23 @@
+{
+  "layout": {
+    "CommandButton2": {
+      "leftPt": 8,
+      "topPt": 36,
+      "widthPt": 56,
+      "heightPt": 19
+    }
+  },
+  "properties": {
+    "CommandButton2": {
+      "caption": "Extraer!",
+      "backColor": "&H00323232&",
+      "foreColor": "&H00CCCCCC&",
+      "fontSize": 8.25,
+      "tabIndex": 1
+    },
+    "TextBox1": {
+      "value": "3.0",
+      "borderColor": "&H005A5A5A&"
+    }
+  }
+}

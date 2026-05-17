@@ -160,7 +160,7 @@ internal sealed record HumanLayoutDocument(
             "backcolor" or "forecolor" or "fontsize" or "bordercolor" =>
                 properties.ContainsKey($"{name}Offset"),
             "tabindex" =>
-                properties.ContainsKey("recordMarkerOffset"),
+                properties.ContainsKey("tabIndexOffset") || properties.ContainsKey("recordMarkerOffset"),
             _ => false
         };
     }

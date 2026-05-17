@@ -1234,6 +1234,7 @@ internal sealed class FrxBinary
                     break;
                 case "backcolor":
                 case "forecolor":
+                case "bordercolor":
                     WriteColorProperty(control, property, value);
                     break;
                 case "fontsize":
@@ -1306,7 +1307,9 @@ internal sealed class FrxBinary
     private void WriteTabIndex(ControlInfo control, JsonElement value)
     {
         var properties = control.Properties ?? throw new CliException($"Control '{control.Name}' has no property metadata.");
-        var markerOffset = GetRequiredIntProperty(properties, "recordMarkerOffset", control.Name);
+        var markerOffset = TryReadInt(properties, "tabIndexOffset", out var tabIndexOffset)
+            ? tabIndexOffset
+            : GetRequiredIntProperty(properties, "recordMarkerOffset", control.Name);
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var tabIndex) || tabIndex is < 0 or > 255)
         {
             throw new CliException($"Property 'tabIndex' for '{control.Name}' must be an integer from 0 to 255.");
