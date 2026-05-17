@@ -77,7 +77,8 @@
     public static void WriteScopesCopy(
         string outFrmPath,
         IReadOnlyDictionary<string, string> controlScopes,
-        IReadOnlyDictionary<string, string>? renames)
+        IReadOnlyDictionary<string, string>? renames,
+        IReadOnlyCollection<string>? removes = null)
     {
         if (controlScopes.Count == 0)
         {
@@ -85,8 +86,14 @@
         }
 
         var grouped = new SortedDictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var removed = removes?.ToHashSet(StringComparer.OrdinalIgnoreCase) ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, scope) in controlScopes)
         {
+            if (removed.Contains(name))
+            {
+                continue;
+            }
+
             var finalName = renames is not null && renames.TryGetValue(name, out var renamed) ? renamed : name;
             if (!grouped.TryGetValue(scope, out var names))
             {

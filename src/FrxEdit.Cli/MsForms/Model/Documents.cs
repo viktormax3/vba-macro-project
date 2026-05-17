@@ -186,7 +186,9 @@ internal sealed record HumanProperty(string Name, object? Value, string Source, 
 internal sealed record LayoutInspection(
     IReadOnlyList<ControlInfo> Controls,
     Dictionary<string, object?>? FrxFormControl = null,
-    Dictionary<string, object?>? ParserValidation = null);
+    Dictionary<string, object?>? ParserValidation = null,
+    IReadOnlyList<ControlInfo>? RemovedControls = null,
+    IReadOnlyList<string>? RemovedStoragePaths = null);
 
 internal sealed record RecordDump(
     int Index,

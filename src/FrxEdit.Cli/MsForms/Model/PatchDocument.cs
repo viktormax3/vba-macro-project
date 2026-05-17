@@ -3,6 +3,7 @@ internal sealed class PatchDocument
     public Dictionary<string, string>? Renames { get; set; }
     public Dictionary<string, LayoutPatch>? Layout { get; set; }
     public Dictionary<string, Dictionary<string, JsonElement>>? Properties { get; set; }
+    public List<string>? Remove { get; set; }
     public List<AddControlPatch>? Add { get; set; }
 }
 

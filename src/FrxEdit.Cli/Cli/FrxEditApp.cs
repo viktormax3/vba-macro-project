@@ -83,7 +83,12 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             ?? throw new CliException("Patch file is empty.");
         if (patch.Add is { Count: > 0 })
         {
-            throw new CliException("The 'add' section is reserved for a future version. This build supports renames and layout only.");
+            throw new CliException("The in-place apply command does not support 'add'. Use rebuild --stream-mode full-patch.");
+        }
+
+        if (patch.Remove is { Count: > 0 })
+        {
+            throw new CliException("The in-place apply command does not support 'remove'. Use rebuild --stream-mode full-patch.");
         }
 
         var project = UserFormProject.Load(frmPath);
@@ -101,7 +106,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
-        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch.Renames);
+        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch.Renames, patch.Remove);
 
         stdout.WriteLine($"Wrote {outFrmPath}");
         stdout.WriteLine($"Wrote {outFrxPath}");
@@ -152,7 +157,8 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
-        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames);
+        var removedScopeNames = targetLayout.RemovedControls?.Select(control => control.Name).ToList() ?? patch?.Remove;
+        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames, removedScopeNames);
 
         var rebuiltProject = UserFormProject.Load(outFrmPath);
         var rebuilt = FrxBinary.Read(rebuiltProject.FrxPath);
@@ -304,8 +310,8 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");
-        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip|object-serialize|object-normalize|object-patch] [--patch patch.json] [--report-out rebuild.report.json]");
-        stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip reconstructs o streams from parser-identified object slices; object-serialize rewrites fixed-length known fields through control serializers; object-normalize rebuilds o streams with normalized counted strings and updates ObjectStreamSize metadata in f streams; object-patch applies variable-length object-payload property patches before rebuilding.");
+        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip|object-serialize|object-normalize|object-patch|full-patch] [--patch patch.json] [--report-out rebuild.report.json]");
+        stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip reconstructs o streams from parser-identified object slices; object-serialize rewrites fixed-length known fields through control serializers; object-normalize rebuilds o streams with normalized counted strings and updates ObjectStreamSize metadata in f streams; object-patch applies variable-length object-payload property patches before rebuilding; full-patch also rebuilds FormSiteData for layout, renames, add, and remove.");
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");

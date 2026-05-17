@@ -25,7 +25,8 @@ internal static class RebuildPatchApplier
         if ((patch.Properties is null || patch.Properties.Count == 0) &&
             (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0) &&
             (!allowFormSitePatch || patch.Renames is null || patch.Renames.Count == 0) &&
-            (!allowFormSitePatch || patch.Add is null || patch.Add.Count == 0))
+            (!allowFormSitePatch || patch.Add is null || patch.Add.Count == 0) &&
+            (!allowFormSitePatch || patch.Remove is null || patch.Remove.Count == 0))
         {
             return source;
         }
@@ -43,9 +44,29 @@ internal static class RebuildPatchApplier
             ? patch.Renames?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        var removeRequests = allowFormSitePatch
+            ? (patch.Remove ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var removalPlan = allowFormSitePatch
+            ? BuildRemovalPlan(source.Controls, removeRequests)
+            : new RemovalPlan(new HashSet<string>(StringComparer.OrdinalIgnoreCase), []);
+
+        var removedControls = new List<ControlInfo>();
         var controls = new List<ControlInfo>(source.Controls.Count + (patch.Add?.Count ?? 0));
         foreach (var control in source.Controls)
         {
+            if (removalPlan.ControlNames.Contains(control.Name))
+            {
+                if (removeRequests.Contains(control.Name))
+                {
+                    ValidateRemovedControl(source.Controls, control);
+                }
+
+                removedControls.Add(control);
+                continue;
+            }
+
             renameByName.TryGetValue(control.Name, out var newName);
             patchedByName.TryGetValue(control.Name, out var requested);
             layoutByName.TryGetValue(control.Name, out var layout);
@@ -86,7 +107,7 @@ internal static class RebuildPatchApplier
             controls.AddRange(BuildAddedControls(controls, patch.Add));
         }
 
-        return source with { Controls = controls };
+        return source with { Controls = controls, RemovedControls = removedControls, RemovedStoragePaths = removalPlan.StoragePaths };
     }
 
     public static void ValidateObjectPatch(PatchDocument patch, bool allowFormSitePatch = false)
@@ -94,6 +115,11 @@ internal static class RebuildPatchApplier
         if (patch.Add is { Count: > 0 } && !allowFormSitePatch)
         {
             throw new CliException("Rebuild object-patch does not support 'add' because new controls require FormSiteData rebuild. Use '--stream-mode full-patch'.");
+        }
+
+        if (patch.Remove is { Count: > 0 } && !allowFormSitePatch)
+        {
+            throw new CliException("Rebuild object-patch does not support 'remove' because removing controls requires FormSiteData rebuild. Use '--stream-mode full-patch'.");
         }
 
         if (patch.Renames is { Count: > 0 } && !allowFormSitePatch)
@@ -118,6 +144,14 @@ internal static class RebuildPatchApplier
             }
         }
 
+        foreach (var name in patch.Remove ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new CliException("Each remove entry requires a non-empty control name.");
+            }
+        }
+
         foreach (var add in patch.Add ?? [])
         {
             if (string.IsNullOrWhiteSpace(add.Name))
@@ -131,6 +165,118 @@ internal static class RebuildPatchApplier
             }
         }
     }
+
+    private sealed record RemovalPlan(HashSet<string> ControlNames, IReadOnlyList<string> StoragePaths);
+
+    private static RemovalPlan BuildRemovalPlan(IReadOnlyList<ControlInfo> controls, HashSet<string> requestedNames)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var storagePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (requestedNames.Count == 0)
+        {
+            return new RemovalPlan(names, []);
+        }
+
+        var byName = controls.ToDictionary(control => control.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var requested in requestedNames)
+        {
+            if (!byName.TryGetValue(requested, out var root))
+            {
+                throw new CliException($"Cannot remove '{requested}': control does not exist.");
+            }
+
+            CollectSubtree(root, controls, names);
+            if (TryGetOwnedStoragePath(root, controls, out var storagePath))
+            {
+                storagePaths.Add(storagePath);
+            }
+        }
+
+        return new RemovalPlan(names, storagePaths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList());
+    }
+
+    private static void CollectSubtree(ControlInfo root, IReadOnlyList<ControlInfo> controls, HashSet<string> names)
+    {
+        if (!names.Add(root.Name))
+        {
+            return;
+        }
+
+        foreach (var child in controls.Where(candidate => string.Equals(candidate.Parent, root.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            CollectSubtree(child, controls, names);
+        }
+    }
+
+    private static void ValidateRemovedControl(IReadOnlyList<ControlInfo> controls, ControlInfo control)
+    {
+        if (control.Properties is null ||
+            !TryGetString(control.Properties, "siteParser", out var siteParser) ||
+            !siteParser.Equals("msOFormsOleSiteConcrete", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Cannot remove '{control.Name}': the control does not expose a documented OleSiteConcrete site.");
+        }
+
+        var hasChildren = controls.Any(candidate => string.Equals(candidate.Parent, control.Name, StringComparison.OrdinalIgnoreCase));
+        if (!hasChildren)
+        {
+            if (TryGetInt(control.Properties, "objectStreamSize", out var objectStreamSize) && objectStreamSize > 0)
+            {
+                return;
+            }
+
+            if (IsStorageParentType(control.Type) && !control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            throw new CliException($"Cannot remove '{control.Name}': this pass supports leaf object-stream controls and complete Frame/MultiPage containers only.");
+        }
+
+        if (!IsStorageParentType(control.Type) || control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Cannot remove '{control.Name}': removing this parent type is not supported yet. This pass supports complete Frame/MultiPage subtree removal.");
+        }
+
+        if (!TryGetOwnedStoragePath(control, controls, out _))
+        {
+            throw new CliException($"Cannot remove '{control.Name}': could not determine the owned storage path to remove.");
+        }
+    }
+
+    private static bool IsStorageParentType(string type) =>
+        type.Equals("Frame", StringComparison.OrdinalIgnoreCase) ||
+        type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase) ||
+        type.Equals("Page", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryGetOwnedStoragePath(ControlInfo parent, IReadOnlyList<ControlInfo> controls, out string storagePath)
+    {
+        storagePath = string.Empty;
+
+        var child = controls.FirstOrDefault(candidate => string.Equals(candidate.Parent, parent.Name, StringComparison.OrdinalIgnoreCase) &&
+            candidate.Properties is not null &&
+            TryGetString(candidate.Properties, "storagePath", out var childStoragePath) &&
+            !string.IsNullOrWhiteSpace(childStoragePath));
+        if (child?.Properties is not null && TryGetString(child.Properties, "storagePath", out storagePath) && !string.IsNullOrWhiteSpace(storagePath))
+        {
+            return true;
+        }
+
+        if (parent.Properties is null || !TryGetString(parent.Properties, "storagePath", out var owningStoragePath) || string.IsNullOrWhiteSpace(owningStoragePath))
+        {
+            return false;
+        }
+
+        if (!TryGetInt(parent.Properties, "siteId", out var id) && !TryGetInt(parent.Properties, "id", out id))
+        {
+            return false;
+        }
+
+        storagePath = $"{owningStoragePath}/i{FormatStorageId(id)}";
+        return true;
+    }
+
+    private static string FormatStorageId(int id) => id is >= 0 and < 10 ? $"0{id}" : id.ToString(CultureInfo.InvariantCulture);
 
     private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions)
     {
@@ -393,6 +539,24 @@ internal static class RebuildPatchApplier
         }
 
         return size;
+    }
+
+    private static bool TryGetString(Dictionary<string, object?> props, string key, out string value)
+    {
+        value = string.Empty;
+        if (!props.TryGetValue(key, out var raw) || raw is null)
+        {
+            return false;
+        }
+
+        if (raw is string text)
+        {
+            value = text;
+            return true;
+        }
+
+        value = raw.ToString() ?? string.Empty;
+        return !string.IsNullOrEmpty(value);
     }
 
     private static bool TryGetInt(Dictionary<string, object?> props, string key, out int value)
