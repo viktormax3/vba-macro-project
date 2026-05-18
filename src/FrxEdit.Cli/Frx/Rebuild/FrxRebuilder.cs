@@ -28,7 +28,34 @@ internal static class FrxRebuilder
         var output = new byte[source.OleOffset + rebuiltOle.Length];
         Buffer.BlockCopy(source.Bytes, 0, output, 0, source.OleOffset);
         Buffer.BlockCopy(rebuiltOle, 0, output, source.OleOffset, rebuiltOle.Length);
+        PatchFrxOleBlobLength(source, output, rebuiltOle.Length);
         return output;
+    }
+
+    private static void PatchFrxOleBlobLength(FrxBinary source, byte[] output, int rebuiltOleLength)
+    {
+        // VBA FRX OLEObjectBlob records commonly wrap the CFB payload in a small
+        // length-prefixed header. In the fixtures, the CFB starts at byte 24 and
+        // the UInt32 at byte 4 is exactly the length of the embedded OLE storage.
+        //
+        // Our parser can find the OLE signature even when this header is stale,
+        // but Corel/Office import uses the declared blob length while assigning
+        // OleObjectBlob. If the rebuilt CFB is shorter/longer and this field still
+        // contains the original size, import fails before MSForms parsing starts.
+        if (source.OleOffset < 8 || output.Length < 8)
+        {
+            return;
+        }
+
+        var originalDeclaredLength = BinaryPrimitives.ReadUInt32LittleEndian(source.Bytes.AsSpan(4, 4));
+        var originalOleLength = checked((uint)(source.Bytes.Length - source.OleOffset));
+        if (originalDeclaredLength != originalOleLength)
+        {
+            // Unknown FRX prefix shape. Preserve it rather than guessing.
+            return;
+        }
+
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(4, 4), checked((uint)rebuiltOleLength));
     }
 }
 

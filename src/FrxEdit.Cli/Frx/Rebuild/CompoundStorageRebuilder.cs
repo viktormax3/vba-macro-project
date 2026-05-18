@@ -10,6 +10,9 @@ internal static class CompoundStorageRebuilder
     private const int FatSector = unchecked((int)0xFFFFFFFD);
     private const int DifatSector = unchecked((int)0xFFFFFFFC);
 
+    private const byte Red = 0x00;
+    private const byte Black = 0x01;
+
     public static byte[] BuildFromDump(CompoundStorageDump dump)
     {
         var builder = new Builder();
@@ -253,11 +256,237 @@ internal static class CompoundStorageRebuilder
                 return -1;
             }
 
-            var mid = start + count / 2;
-            var node = children[mid];
-            node.LeftSiblingId = AssignBalancedSiblingTree(children, start, mid - start);
-            node.RightSiblingId = AssignBalancedSiblingTree(children, mid + 1, start + count - mid - 1);
-            return node.DirectoryId;
+            // MS-CFB requires each sibling set to be a valid red-black tree.
+            // A merely balanced binary tree is not enough: if we preserve colors from the
+            // original directory while changing the tree shape, we can produce red-red or
+            // black-height violations that our parser tolerates but IStorage/MSForms can reject.
+            // Build a fresh red-black tree from the sorted children instead.
+            var range = children.Skip(start).Take(count).ToList();
+            return AssignRedBlackSiblingTree(range);
+        }
+
+        private static int AssignRedBlackSiblingTree(IReadOnlyList<Node> sortedChildren)
+        {
+            if (sortedChildren.Count == 0)
+            {
+                return -1;
+            }
+
+            foreach (var child in sortedChildren)
+            {
+                child.LeftSiblingId = -1;
+                child.RightSiblingId = -1;
+                child.DirectoryColor = Red;
+            }
+
+            var byId = sortedChildren.ToDictionary(c => c.DirectoryId);
+            var parents = new Dictionary<Node, Node?>();
+            Node? root = null;
+
+            foreach (var node in sortedChildren)
+            {
+                InsertRedBlackNode(node, ref root, byId, parents);
+            }
+
+            if (root is null)
+            {
+                return -1;
+            }
+
+            root.DirectoryColor = Black;
+            return root.DirectoryId;
+        }
+
+        private static void InsertRedBlackNode(
+            Node node,
+            ref Node? root,
+            IReadOnlyDictionary<int, Node> byId,
+            Dictionary<Node, Node?> parents)
+        {
+            Node? parent = null;
+            var current = root;
+
+            while (current is not null)
+            {
+                parent = current;
+                current = CfbNameComparer.Instance.Compare(node.Name, current.Name) < 0
+                    ? GetNodeById(byId, current.LeftSiblingId)
+                    : GetNodeById(byId, current.RightSiblingId);
+            }
+
+            parents[node] = parent;
+            if (parent is null)
+            {
+                root = node;
+            }
+            else if (CfbNameComparer.Instance.Compare(node.Name, parent.Name) < 0)
+            {
+                parent.LeftSiblingId = node.DirectoryId;
+            }
+            else
+            {
+                parent.RightSiblingId = node.DirectoryId;
+            }
+
+            node.LeftSiblingId = -1;
+            node.RightSiblingId = -1;
+            node.DirectoryColor = Red;
+
+            FixRedBlackInsert(node, ref root, byId, parents);
+        }
+
+        private static void FixRedBlackInsert(
+            Node node,
+            ref Node? root,
+            IReadOnlyDictionary<int, Node> byId,
+            Dictionary<Node, Node?> parents)
+        {
+            while (parents.TryGetValue(node, out var parent) && parent is not null && parent.DirectoryColor == Red)
+            {
+                if (!parents.TryGetValue(parent, out var grandparent) || grandparent is null)
+                {
+                    break;
+                }
+
+                if (parent.DirectoryId == grandparent.LeftSiblingId)
+                {
+                    var uncle = GetNodeById(byId, grandparent.RightSiblingId);
+                    if (uncle is not null && uncle.DirectoryColor == Red)
+                    {
+                        parent.DirectoryColor = Black;
+                        uncle.DirectoryColor = Black;
+                        grandparent.DirectoryColor = Red;
+                        node = grandparent;
+                    }
+                    else
+                    {
+                        if (node.DirectoryId == parent.RightSiblingId)
+                        {
+                            node = parent;
+                            RotateLeft(node, ref root, byId, parents);
+                            parent = parents[node];
+                            if (parent is null || !parents.TryGetValue(parent, out grandparent) || grandparent is null)
+                            {
+                                break;
+                            }
+                        }
+
+                        parent.DirectoryColor = Black;
+                        grandparent.DirectoryColor = Red;
+                        RotateRight(grandparent, ref root, byId, parents);
+                    }
+                }
+                else
+                {
+                    var uncle = GetNodeById(byId, grandparent.LeftSiblingId);
+                    if (uncle is not null && uncle.DirectoryColor == Red)
+                    {
+                        parent.DirectoryColor = Black;
+                        uncle.DirectoryColor = Black;
+                        grandparent.DirectoryColor = Red;
+                        node = grandparent;
+                    }
+                    else
+                    {
+                        if (node.DirectoryId == parent.LeftSiblingId)
+                        {
+                            node = parent;
+                            RotateRight(node, ref root, byId, parents);
+                            parent = parents[node];
+                            if (parent is null || !parents.TryGetValue(parent, out grandparent) || grandparent is null)
+                            {
+                                break;
+                            }
+                        }
+
+                        parent.DirectoryColor = Black;
+                        grandparent.DirectoryColor = Red;
+                        RotateLeft(grandparent, ref root, byId, parents);
+                    }
+                }
+            }
+
+            if (root is not null)
+            {
+                root.DirectoryColor = Black;
+            }
+        }
+
+        private static void RotateLeft(
+            Node node,
+            ref Node? root,
+            IReadOnlyDictionary<int, Node> byId,
+            Dictionary<Node, Node?> parents)
+        {
+            var pivot = GetNodeById(byId, node.RightSiblingId)
+                ?? throw new CliException($"Cannot rotate CFB directory tree left at '{node.Name}': missing right sibling.");
+
+            node.RightSiblingId = pivot.LeftSiblingId;
+            var pivotLeft = GetNodeById(byId, pivot.LeftSiblingId);
+            if (pivotLeft is not null)
+            {
+                parents[pivotLeft] = node;
+            }
+
+            parents.TryGetValue(node, out var parent);
+            parents[pivot] = parent;
+
+            if (parent is null)
+            {
+                root = pivot;
+            }
+            else if (node.DirectoryId == parent.LeftSiblingId)
+            {
+                parent.LeftSiblingId = pivot.DirectoryId;
+            }
+            else
+            {
+                parent.RightSiblingId = pivot.DirectoryId;
+            }
+
+            pivot.LeftSiblingId = node.DirectoryId;
+            parents[node] = pivot;
+        }
+
+        private static void RotateRight(
+            Node node,
+            ref Node? root,
+            IReadOnlyDictionary<int, Node> byId,
+            Dictionary<Node, Node?> parents)
+        {
+            var pivot = GetNodeById(byId, node.LeftSiblingId)
+                ?? throw new CliException($"Cannot rotate CFB directory tree right at '{node.Name}': missing left sibling.");
+
+            node.LeftSiblingId = pivot.RightSiblingId;
+            var pivotRight = GetNodeById(byId, pivot.RightSiblingId);
+            if (pivotRight is not null)
+            {
+                parents[pivotRight] = node;
+            }
+
+            parents.TryGetValue(node, out var parent);
+            parents[pivot] = parent;
+
+            if (parent is null)
+            {
+                root = pivot;
+            }
+            else if (node.DirectoryId == parent.RightSiblingId)
+            {
+                parent.RightSiblingId = pivot.DirectoryId;
+            }
+            else
+            {
+                parent.LeftSiblingId = pivot.DirectoryId;
+            }
+
+            pivot.RightSiblingId = node.DirectoryId;
+            parents[node] = pivot;
+        }
+
+        private static Node? GetNodeById(IReadOnlyDictionary<int, Node> byId, int directoryId)
+        {
+            return directoryId < 0 ? null : byId.GetValueOrDefault(directoryId);
         }
 
         private static byte[] BuildDirectoryStream(IReadOnlyList<DirectoryEntryBuild> entries)

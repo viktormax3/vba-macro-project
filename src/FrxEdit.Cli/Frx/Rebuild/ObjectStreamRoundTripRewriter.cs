@@ -398,7 +398,8 @@ internal static class ObjectStreamRoundTripRewriter
         var slices = BuildFormSiteSlices(formStream, controls);
         var additions = BuildAddedFormSiteSlices(formStream, controls);
         var removals = BuildRemovedFormSiteSlices(formStream, removedControls);
-        if (slices.Count == 0 && additions.Count == 0 && removals.Count == 0)
+        var allOriginalSlices = BuildOriginalFormSiteRewriteSlices(formStream, slices, removals);
+        if (allOriginalSlices.Count == 0 && additions.Count == 0)
         {
             var fallback = formStream.Data.ToArray();
             if (sizeUpdates.Count > 0)
@@ -419,12 +420,6 @@ internal static class ObjectStreamRoundTripRewriter
         var depthDelta = 0;
         var countDelta = additions.Count - removals.Count;
 
-        var allOriginalSlices = slices
-            .Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: false))
-            .Concat(removals.Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: true)))
-            .OrderBy(slice => slice.Start)
-            .ToList();
-
         var shouldRewriteDepths = additions.Count > 0 || removals.Count > 0;
         if (shouldRewriteDepths)
         {
@@ -442,7 +437,11 @@ internal static class ObjectStreamRoundTripRewriter
             }
 
             output.Write(original, 0, depthStart);
-            var rebuiltDepths = SerializeSiteDepthsAndTypes(slices.Select(s => s.Control).Concat(additions.Select(a => a.Control)).ToList(), formStream.Path);
+            var rebuiltDepths = SerializeSiteDepthsAndTypes(allOriginalSlices
+                .Where(slice => !slice.IsRemoval)
+                .Select(slice => slice.Control)
+                .Concat(additions.Select(a => a.Control))
+                .ToList(), formStream.Path);
             output.Write(rebuiltDepths, 0, rebuiltDepths.Length);
             depthDelta = rebuiltDepths.Length - (sitesStart - depthStart);
             cursor = sitesStart;
@@ -504,17 +503,134 @@ internal static class ObjectStreamRoundTripRewriter
         var fullDelta = totalDelta + depthDelta;
         if (fullDelta != 0)
         {
-            var referenceControl = slices.Count > 0 ? slices[0].Control : removals.Count > 0 ? removals[0].Control : additions[0].Control;
+            var referenceControl = allOriginalSlices.Count > 0 ? allOriginalSlices[0].Control : additions[0].Control;
             PatchSiteDataCountOfBytes(rebuilt, referenceControl, fullDelta, formStream.Path);
         }
 
         if (countDelta != 0)
         {
-            var referenceControl = slices.Count > 0 ? slices[0].Control : removals.Count > 0 ? removals[0].Control : additions[0].Control;
+            var referenceControl = allOriginalSlices.Count > 0 ? allOriginalSlices[0].Control : additions[0].Control;
             PatchSiteDataCountOfSites(rebuilt, referenceControl, countDelta, formStream.Path);
         }
 
         return rebuilt;
+    }
+
+
+    private static List<FormSiteRewriteSlice> BuildOriginalFormSiteRewriteSlices(
+        StorageEntryDump formStream,
+        IReadOnlyList<FormSiteSlice> keptSlices,
+        IReadOnlyList<FormSiteSlice> removedSlices)
+    {
+        var keptByStart = keptSlices
+            .GroupBy(slice => slice.Start)
+            .ToDictionary(group => group.Key, group => group.First());
+        var removedByStart = removedSlices
+            .GroupBy(slice => slice.Start)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var parsedSites = StructuredMsFormsParser.Parse(formStream);
+        if (parsedSites.Count == 0)
+        {
+            return keptSlices
+                .Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: false))
+                .Concat(removedSlices.Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: true)))
+                .OrderBy(slice => slice.Start)
+                .ToList();
+        }
+
+        var result = new List<FormSiteRewriteSlice>();
+        var matchedKept = new HashSet<int>();
+        var matchedRemoved = new HashSet<int>();
+
+        foreach (var site in parsedSites.OrderBy(site => site.StreamStart))
+        {
+            if (removedByStart.TryGetValue(site.StreamStart, out var removed))
+            {
+                result.Add(new FormSiteRewriteSlice(removed.Control, removed.Start, removed.Size, removed.SourceStreamPath, IsRemoval: true));
+                matchedRemoved.Add(site.StreamStart);
+                continue;
+            }
+
+            if (keptByStart.TryGetValue(site.StreamStart, out var kept))
+            {
+                result.Add(new FormSiteRewriteSlice(kept.Control, kept.Start, kept.Size, kept.SourceStreamPath, IsRemoval: false));
+                matchedKept.Add(site.StreamStart);
+                continue;
+            }
+
+            var preserved = CreatePreservedSiteControl(site, formStream);
+            result.Add(new FormSiteRewriteSlice(preserved, site.StreamStart, checked(site.StreamEnd - site.StreamStart), formStream.Path ?? string.Empty, IsRemoval: false));
+        }
+
+        foreach (var slice in keptSlices)
+        {
+            if (!matchedKept.Contains(slice.Start))
+            {
+                throw new CliException($"Cannot rebuild form stream '{formStream.Path}': parsed FormSiteData did not contain kept site '{slice.Control.Name}' at local offset {slice.Start}.");
+            }
+        }
+
+        foreach (var slice in removedSlices)
+        {
+            if (!matchedRemoved.Contains(slice.Start))
+            {
+                throw new CliException($"Cannot rebuild form stream '{formStream.Path}': parsed FormSiteData did not contain removed site '{slice.Control.Name}' at local offset {slice.Start}.");
+            }
+        }
+
+        return result;
+    }
+
+    private static ControlInfo CreatePreservedSiteControl(SiteDescriptor site, StorageEntryDump formStream)
+    {
+        var props = new Dictionary<string, object?>(site.ExtraProperties, StringComparer.OrdinalIgnoreCase)
+        {
+            ["siteIndex"] = site.SiteIndex,
+            ["siteDepth"] = (int)site.Depth,
+            ["siteType"] = (int)site.SiteType,
+            ["siteLocalOffset"] = site.StreamStart,
+            ["cbSite"] = site.StreamEnd - site.StreamStart - 4,
+            ["streamPath"] = formStream.Path,
+            ["internalSite"] = site.IsInternalSite,
+            ["preservedUnmappedSite"] = true
+        };
+
+        if (!string.IsNullOrWhiteSpace(site.Name))
+        {
+            props["name"] = site.Name;
+            props["siteName"] = site.Name;
+        }
+
+        var name = !string.IsNullOrWhiteSpace(site.Name)
+            ? site.Name!
+            : $"__internal_site_{site.SiteIndex}_{site.ControlType ?? "Ole"}";
+        var type = !string.IsNullOrWhiteSpace(site.ControlType)
+            ? site.ControlType!
+            : "OleSite";
+
+        return new ControlInfo(
+            name,
+            type,
+            site.Left,
+            site.Top,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            props,
+            null,
+            null,
+            site.SiteIndex,
+            null,
+            null,
+            site.NameOffset,
+            site.LeftOffset > 0 && formStream.FileOffsets.Length > site.LeftOffset ? formStream.FileOffsets[site.LeftOffset] : null,
+            site.TopOffset > 0 && formStream.FileOffsets.Length > site.TopOffset ? formStream.FileOffsets[site.TopOffset] : null,
+            null,
+            null);
     }
 
     private static List<FormSiteSlice> BuildFormSiteSlices(StorageEntryDump formStream, IReadOnlyList<ControlInfo> controls)
