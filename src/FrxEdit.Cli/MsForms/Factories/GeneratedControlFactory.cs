@@ -8,12 +8,19 @@ internal static class GeneratedControlFactory
         new CommandButtonControlSchema(),
         new LabelControlSchema(),
         new TextBoxControlSchema(),
+        new ComboBoxControlSchema(),
+        new ListBoxControlSchema(),
         new CheckBoxControlSchema(),
         new OptionButtonControlSchema(),
-        new ToggleButtonControlSchema()
+        new ToggleButtonControlSchema(),
+        new ImageControlSchema(),
+        new ScrollBarControlSchema(),
+        new SpinButtonControlSchema(),
+        new TabStripControlSchema()
     ];
 
     public static bool CanCreate(string type) => TryGetSchema(type, out _);
+    public static string SupportedTypes => string.Join(", ", Schemas.Select(schema => schema.Type));
 
     public static GeneratedControlBytes Create(
         string type,

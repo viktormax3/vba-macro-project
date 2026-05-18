@@ -8,11 +8,17 @@ internal static class ObjectStreamRoundTripRewriter
         var slicesByObjectStreamPath = BuildSlicesByObjectStreamPath(layout);
         var additionsByObjectStreamPath = BuildAdditionsByObjectStreamPath(layout);
         var removalsByObjectStreamPath = BuildRemovedByObjectStreamPath(layout);
+        var hasFormSiteChanges = LayoutHasFormSiteChanges(layout);
+        var hasGeneratedStorageStreams = LayoutHasGeneratedStorageStreams(layout);
         var streamsByPath = dump.Streams
             .Where(stream => !string.IsNullOrWhiteSpace(stream.Path))
             .GroupBy(stream => stream.Path!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        if (slicesByObjectStreamPath.Count == 0 && additionsByObjectStreamPath.Count == 0 && removalsByObjectStreamPath.Count == 0)
+        if (slicesByObjectStreamPath.Count == 0 &&
+            additionsByObjectStreamPath.Count == 0 &&
+            removalsByObjectStreamPath.Count == 0 &&
+            !hasFormSiteChanges &&
+            !hasGeneratedStorageStreams)
         {
             if (mode != ObjectStreamRewriteMode.RoundTrip && LayoutHasObjectPayloads(layout))
             {
@@ -54,7 +60,7 @@ internal static class ObjectStreamRoundTripRewriter
             rewrittenObjectStreams[stream.Path] = rewritten;
         }
 
-        if (rewrittenObjectStreams.Count == 0)
+        if (rewrittenObjectStreams.Count == 0 && !hasFormSiteChanges && !hasGeneratedStorageStreams)
         {
             if (mode != ObjectStreamRewriteMode.RoundTrip)
             {
@@ -129,7 +135,90 @@ internal static class ObjectStreamRoundTripRewriter
             return stream;
         }).Where(stream => !IsUnderRemovedStorage(stream.Path, removedStoragePaths)).ToList();
 
+        if (mode == ObjectStreamRewriteMode.FormAndObjectPatch && hasGeneratedStorageStreams)
+        {
+            streams = AddGeneratedStorageStreams(streams, layout);
+        }
+
         return dump with { Streams = streams };
+    }
+
+    private static bool LayoutHasFormSiteChanges(LayoutInspection layout) =>
+        layout.Controls.Any(control => control.Properties is not null && IsAddedControl(control.Properties)) ||
+        (layout.RemovedControls?.Count > 0);
+
+    private static bool LayoutHasGeneratedStorageStreams(LayoutInspection layout) =>
+        layout.Controls.Any(control => control.Properties is not null &&
+            TryGetString(control.Properties, "generatedStoragePath", out var path) &&
+            !string.IsNullOrWhiteSpace(path));
+
+    private static List<StorageEntryDump> AddGeneratedStorageStreams(List<StorageEntryDump> streams, LayoutInspection layout)
+    {
+        var existingPaths = streams
+            .Where(stream => !string.IsNullOrWhiteSpace(stream.Path))
+            .Select(stream => stream.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var result = streams.ToList();
+        var nextIndex = result.Select(stream => stream.Index).DefaultIfEmpty(0).Max() + 1;
+        var frameCompObj = result.FirstOrDefault(stream =>
+            stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+            stream.Name.Equals("\u0001CompObj", StringComparison.Ordinal) &&
+            stream.Path.Contains("/i", StringComparison.OrdinalIgnoreCase) &&
+            stream.Size == 112);
+
+        foreach (var control in layout.Controls)
+        {
+            var props = control.Properties;
+            if (props is null ||
+                !TryGetString(props, "generatedStoragePath", out var storagePath) ||
+                string.IsNullOrWhiteSpace(storagePath))
+            {
+                continue;
+            }
+
+            if (TryGetByteArray(props, "generatedStorageF", out var fBytes))
+            {
+                AddStream($"{storagePath}/f", "f", fBytes);
+            }
+
+            if (TryGetByteArray(props, "generatedStorageO", out var oBytes))
+            {
+                AddStream($"{storagePath}/o", "o", oBytes);
+            }
+
+            if (frameCompObj is not null)
+            {
+                AddStream($"{storagePath}/\u0001CompObj", "\u0001CompObj", frameCompObj.Data);
+            }
+        }
+
+        return result;
+
+        void AddStream(string path, string name, byte[] data)
+        {
+            if (!existingPaths.Add(path))
+            {
+                throw new CliException($"Cannot add generated CFB stream '{path}': path already exists.");
+            }
+
+            result.Add(new StorageEntryDump(
+                nextIndex++,
+                name,
+                "Stream",
+                -1,
+                (ulong)data.Length,
+                data.Length < 4096,
+                string.Empty,
+                null,
+                null,
+                [],
+                data,
+                Enumerable.Range(0, data.Length).ToArray())
+            {
+                Path = path,
+                ParentPath = path.Contains('/') ? path[..path.LastIndexOf('/')] : null
+            });
+        }
     }
 
     private static bool IsUnderRemovedStorage(string? streamPath, IReadOnlyList<string> removedStoragePaths)
@@ -589,6 +678,12 @@ internal static class ObjectStreamRoundTripRewriter
         {
             if (allOriginalSlices.Count == 0)
             {
+                var rebuiltEmpty = TryRewriteEmptyFormSiteData(formStream, additions);
+                if (rebuiltEmpty is not null)
+                {
+                    return rebuiltEmpty;
+                }
+
                 throw new CliException($"Cannot rebuild SiteDepthsAndTypes in '{formStream.Path}': no existing FormSiteData slices were found.");
             }
 
@@ -688,6 +783,57 @@ internal static class ObjectStreamRoundTripRewriter
         }
 
         return rebuilt;
+    }
+
+    private static byte[]? TryRewriteEmptyFormSiteData(StorageEntryDump formStream, IReadOnlyList<FormSiteSlice> additions)
+    {
+        if (additions.Count == 0)
+        {
+            return null;
+        }
+
+        var data = formStream.Data;
+        if (data.Length < 12 || data[0] != 0x00 || data[1] != 0x04)
+        {
+            return null;
+        }
+
+        var cbForm = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
+        var siteDataOffset = 4 + cbForm;
+        if (siteDataOffset < 0 || siteDataOffset + 10 > data.Length)
+        {
+            return null;
+        }
+
+        var classInfoCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(siteDataOffset, 2));
+        var countOfSites = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 2, 4));
+        var countOfBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 6, 4));
+        if (classInfoCount != 0 || countOfSites != 0 || countOfBytes != 0)
+        {
+            return null;
+        }
+
+        using var payload = new MemoryStream();
+        var depthBytes = SerializeSiteDepthsAndTypes(additions.Select(addition => addition.Control).ToList(), formStream.Path);
+        payload.Write(depthBytes);
+        foreach (var addition in additions)
+        {
+            if (addition.Control.Properties is null ||
+                !TryGetByteArray(addition.Control.Properties, "generatedFormSitePayload", out var generatedSitePayload))
+            {
+                return null;
+            }
+
+            payload.Write(generatedSitePayload);
+        }
+
+        using var output = new MemoryStream();
+        output.Write(data, 0, siteDataOffset);
+        MsFormsFactoryBinary.WriteUInt16(output, 0);
+        MsFormsFactoryBinary.WriteUInt32(output, checked((uint)additions.Count));
+        MsFormsFactoryBinary.WriteUInt32(output, checked((uint)payload.Length));
+        output.Write(payload.ToArray());
+        return output.ToArray();
     }
 
 
@@ -1441,6 +1587,12 @@ internal static class ObjectStreamRoundTripRewriter
             if (!TryGetString(props, "storagePath", out var storagePath) || string.IsNullOrWhiteSpace(storagePath))
             {
                 throw new CliException($"Cannot add '{control.Name}': missing target storagePath metadata.");
+            }
+
+            if (TryGetString(props, "generatedStoragePath", out var generatedStoragePath) &&
+                !string.IsNullOrWhiteSpace(generatedStoragePath))
+            {
+                continue;
             }
 
             if (!TryGetInt(props, "objectStreamLocalOffset", out var templateStart) ||

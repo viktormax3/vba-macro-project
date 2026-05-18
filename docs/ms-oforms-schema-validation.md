@@ -38,22 +38,23 @@ Ready:
 - `CommandButton`
 - `Label`
 - `TextBox`
+- `ComboBox`
+- `ListBox`
 - `CheckBox`
 - `OptionButton`
 - `ToggleButton`
-
-Pending leaf factories:
-
-- `ComboBox`
-- `ListBox`
 - `Image` without initial picture
 - `ScrollBar`
 - `SpinButton`
 - `TabStrip`
+- `Frame` empty storage-backed container
+
+Pending leaf factories:
+
+- none
 
 Pending storage factories:
 
-- `Frame`
 - `MultiPage`
 - `Page`
 - root `UserForm`

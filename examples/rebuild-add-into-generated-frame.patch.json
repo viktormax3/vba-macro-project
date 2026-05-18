@@ -1,0 +1,14 @@
+{
+  "add": [
+    {
+      "type": "TextBox",
+      "name": "TxtInsideGeneratedFrame",
+      "parent": "FrameGenerated",
+      "leftPt": 12,
+      "topPt": 18,
+      "widthPt": 84,
+      "heightPt": 18,
+      "value": "Dentro"
+    }
+  ]
+}

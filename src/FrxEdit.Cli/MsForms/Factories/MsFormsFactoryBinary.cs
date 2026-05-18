@@ -99,6 +99,45 @@ internal static class MsFormsFactoryBinary
         };
     }
 
+    public static int? GetInt32(Dictionary<string, object?> properties, string name)
+    {
+        if (!properties.TryGetValue(name, out var value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            int i => i,
+            uint ui when ui <= int.MaxValue => (int)ui,
+            short s => s,
+            ushort us => us,
+            byte b => b,
+            JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var i) => i,
+            string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) => i,
+            _ => null
+        };
+    }
+
+    public static IReadOnlyList<string>? GetStringList(Dictionary<string, object?> properties, string name)
+    {
+        if (!properties.TryGetValue(name, out var value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            string text => [text],
+            string[] array => array,
+            IReadOnlyList<string> list => list,
+            JsonElement { ValueKind: JsonValueKind.Array } element => element.EnumerateArray()
+                .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() ?? string.Empty : item.ToString())
+                .ToArray(),
+            _ => null
+        };
+    }
+
     public static uint ParseColor(string? text, uint fallback)
     {
         if (string.IsNullOrWhiteSpace(text))

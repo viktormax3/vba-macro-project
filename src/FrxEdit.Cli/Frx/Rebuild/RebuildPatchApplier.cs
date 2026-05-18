@@ -187,9 +187,11 @@ internal static class RebuildPatchApplier
                 throw new CliException($"Add entry '{add.Name}' requires either 'fromTemplate' or 'type'.");
             }
 
-            if (string.IsNullOrWhiteSpace(add.FromTemplate) && !GeneratedControlFactory.CanCreate(add.Type!))
+            if (string.IsNullOrWhiteSpace(add.FromTemplate) &&
+                !GeneratedControlFactory.CanCreate(add.Type!) &&
+                !GeneratedStorageFactory.CanCreate(add.Type!))
             {
-                throw new CliException($"Add entry '{add.Name}' requested type '{add.Type}', but this build can create only: CommandButton, Label, TextBox. Use 'fromTemplate' for other types.");
+                throw new CliException($"Add entry '{add.Name}' requested type '{add.Type}', but this build can create only: {GeneratedControlFactory.SupportedTypes}, Frame. Use 'fromTemplate' for other types.");
             }
         }
     }
@@ -322,6 +324,14 @@ internal static class RebuildPatchApplier
             return true;
         }
 
+        if (parent.Properties is not null &&
+            TryGetString(parent.Properties, "generatedStoragePath", out var generatedStoragePath) &&
+            !string.IsNullOrWhiteSpace(generatedStoragePath))
+        {
+            storagePath = generatedStoragePath;
+            return true;
+        }
+
         if (parent.Properties is null || !TryGetString(parent.Properties, "storagePath", out var owningStoragePath) || string.IsNullOrWhiteSpace(owningStoragePath))
         {
             return false;
@@ -445,12 +455,8 @@ internal static class RebuildPatchApplier
 
             var parent = add.Parent is null ? template?.Parent : (string.IsNullOrWhiteSpace(add.Parent) ? null : add.Parent.Trim());
 
-            var targetStoragePath = ResolveTargetStoragePath(parent, existingControls);
+            var targetStoragePath = ResolveTargetStoragePath(parent, existingControls.Concat(result).ToList());
             var targetStreamPath = $"{targetStoragePath}/f";
-            if (!existingControls.Any(c => c.Properties is not null && TryGetString(c.Properties, "streamPath", out var candidateStreamPath) && candidateStreamPath.Equals(targetStreamPath, StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new CliException($"Add target '{name}' cannot target '{parent ?? "<root>"}': this pass requires at least one existing child in the target FormSiteData stream so CountOfSites/CountOfBytes/ClassTable metadata can be rebuilt safely.");
-            }
 
             if (template is not null && template.Properties is null)
             {
@@ -506,7 +512,32 @@ internal static class RebuildPatchApplier
             var rawWidth = add.RawWidth ?? add.Width ?? ToRawPoints(add.WidthPt) ?? template?.RawWidth;
             var rawHeight = add.RawHeight ?? add.Height ?? ToRawPoints(add.HeightPt) ?? template?.RawHeight;
 
-            if (template is null)
+            if (template is null && type.Equals("Frame", StringComparison.OrdinalIgnoreCase))
+            {
+                var ownedStoragePath = $"{targetStoragePath}/i{FormatStorageId(maxId)}";
+                var generated = GeneratedStorageFactory.CreateFrame(
+                    name,
+                    maxId,
+                    (int)props["tabIndex"]!,
+                    left,
+                    top,
+                    rawWidth ?? 0,
+                    rawHeight ?? 0,
+                    add.Caption,
+                    ownedStoragePath);
+
+                props["generatedFormSitePayload"] = generated.SitePayload;
+                props.Remove("caption");
+                props["siteDepth"] = 0;
+                props["siteType"] = 1;
+                props["siteLocalOffset"] = 0;
+                props["cbSite"] = generated.SitePayload.Length - 4;
+                foreach (var (propertyName, propertyValue) in generated.Metadata)
+                {
+                    props[propertyName] = propertyValue;
+                }
+            }
+            else if (template is null)
             {
                 var generated = GeneratedControlFactory.Create(
                     type!,
@@ -660,6 +691,10 @@ internal static class RebuildPatchApplier
             case "fontname":
                 props[CanonicalPropertyName(propertyName)] = RequireString(controlName, propertyName, value);
                 break;
+            case "tabcaptions":
+            case "tabnames":
+                props[CanonicalPropertyName(propertyName)] = RequireStringArray(controlName, propertyName, value);
+                break;
             case "controltiptext":
                 if (!props.ContainsKey("controlTipTextSpan"))
                 {
@@ -702,6 +737,8 @@ internal static class RebuildPatchApplier
             "backcolor" => "backColor",
             "forecolor" => "foreColor",
             "bordercolor" => "borderColor",
+            "tabcaptions" => "tabCaptions",
+            "tabnames" => "tabNames",
             _ => propertyName
         };
 
@@ -713,6 +750,32 @@ internal static class RebuildPatchApplier
         }
 
         return value.GetString() ?? string.Empty;
+    }
+
+    private static string[] RequireStringArray(string controlName, string propertyName, JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must be an array of strings.");
+        }
+
+        var result = new List<string>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                throw new CliException($"Property '{propertyName}' for '{controlName}' must be an array of strings.");
+            }
+
+            result.Add(item.GetString() ?? string.Empty);
+        }
+
+        if (result.Count == 0)
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must contain at least one string.");
+        }
+
+        return result.ToArray();
     }
 
     private static string RequireColorLikeString(string controlName, string propertyName, JsonElement value)

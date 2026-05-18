@@ -1,8 +1,8 @@
 {
   "add": [
     {
-      "type": "ComboBox",
-      "name": "ComboGenerated",
+      "type": "MultiPage",
+      "name": "MultiPageGenerated",
       "parent": "Frame2",
       "leftPt": 12,
       "topPt": 120,

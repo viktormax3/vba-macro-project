@@ -116,11 +116,12 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
 
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
+        var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value");
         var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
         metadata["parser"] = "msOFormsMorphData";
         metadata["controlType"] = "TextBox";
         metadata["sizeSource"] = "morphDataExtraDataBlock";
-        metadata["propMask"] = string.IsNullOrEmpty(request.Value)
+        metadata["propMask"] = string.IsNullOrEmpty(value)
             ? "0x0000000080000101"
             : "0x0000000080400101";
         metadata["variousPropertyBitsRaw"] = 0x2C80_481B;
@@ -129,9 +130,9 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         metadata["tabStop"] = true;
         metadata["visible"] = true;
         metadata["streamed"] = true;
-        if (!string.IsNullOrEmpty(request.Value))
+        if (!string.IsNullOrEmpty(value))
         {
-            metadata["value"] = request.Value;
+            metadata["value"] = value;
         }
 
         return metadata;
@@ -216,4 +217,287 @@ internal sealed class ToggleButtonControlSchema : MorphButtonControlSchema
     public override string Type => "ToggleButton";
     protected override byte DisplayStyle => 6;
     protected override uint TextPropsMask => TextPropsFactory.CommandButtonMask;
+}
+
+internal sealed class ComboBoxControlSchema : IGeneratedControlSchema
+{
+    private const ulong PropMask = 0x0000_0000_8005_0141ul;
+    private const uint VariousPropertyBits = 0x2C80_481B;
+
+    public string Type => "ComboBox";
+    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+
+    public byte[] BuildObjectPayload(GeneratedControlRequest request)
+    {
+        using var dataBlock = new MemoryStream();
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, VariousPropertyBits);
+        dataBlock.WriteByte(3); // fmDisplayStyleDropDownCombo.
+        dataBlock.WriteByte(1); // fmMatchEntryComplete.
+        dataBlock.WriteByte(2); // fmShowDropButtonWhenFocus.
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+
+        using var extra = new MemoryStream();
+        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+
+        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(PropMask, dataBlock.ToArray(), extra.ToArray());
+        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
+        return [.. control, .. textProps];
+    }
+
+    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
+    {
+        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
+        metadata["parser"] = "msOFormsMorphData";
+        metadata["controlType"] = Type;
+        metadata["sizeSource"] = "morphDataExtraDataBlock";
+        metadata["propMask"] = "0x0000000080050141";
+        metadata["variousPropertyBitsRaw"] = VariousPropertyBits;
+        metadata["displayStyle"] = 3;
+        metadata["matchEntry"] = 1;
+        metadata["showDropButtonWhen"] = 2;
+        metadata["objectStreamSize"] = objectPayloadSize;
+        metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
+        metadata["tabStop"] = true;
+        metadata["visible"] = true;
+        metadata["streamed"] = true;
+        return metadata;
+    }
+}
+
+internal sealed class ListBoxControlSchema : IGeneratedControlSchema
+{
+    private const ulong PropMask = 0x0000_0000_8001_0160ul;
+
+    public string Type => "ListBox";
+    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+
+    public byte[] BuildObjectPayload(GeneratedControlRequest request)
+    {
+        using var dataBlock = new MemoryStream();
+        dataBlock.WriteByte(3); // fmScrollBarsBoth.
+        dataBlock.WriteByte(2); // fmDisplayStyleList.
+        dataBlock.WriteByte(0); // fmMatchEntryFirstLetter.
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+
+        using var extra = new MemoryStream();
+        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+
+        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(PropMask, dataBlock.ToArray(), extra.ToArray());
+        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
+        return [.. control, .. textProps];
+    }
+
+    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
+    {
+        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
+        metadata["parser"] = "msOFormsMorphData";
+        metadata["controlType"] = Type;
+        metadata["sizeSource"] = "morphDataExtraDataBlock";
+        metadata["propMask"] = "0x0000000080010160";
+        metadata["scrollBars"] = 3;
+        metadata["displayStyle"] = 2;
+        metadata["matchEntry"] = 0;
+        metadata["objectStreamSize"] = objectPayloadSize;
+        metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
+        metadata["tabStop"] = true;
+        metadata["visible"] = true;
+        metadata["streamed"] = true;
+        return metadata;
+    }
+}
+
+internal abstract class SpinLikeControlSchema : IGeneratedControlSchema
+{
+    public abstract string Type { get; }
+    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+    protected abstract uint PropMask { get; }
+    protected abstract string Parser { get; }
+    protected abstract string SizeSource { get; }
+    protected virtual string PropMaskName => "propMask";
+    protected virtual int DefaultOrientation => -1;
+
+    public byte[] BuildObjectPayload(GeneratedControlRequest request)
+    {
+        var orientation = MsFormsFactoryBinary.GetInt32(request.Properties, "orientation") ?? DefaultOrientation;
+
+        using var dataBlock = new MemoryStream();
+        MsFormsFactoryBinary.WriteInt32(dataBlock, orientation);
+
+        using var extra = new MemoryStream();
+        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+
+        return MsFormsFactoryBinary.BuildVersionedControl(0, 2, PropMask, dataBlock.ToArray(), extra.ToArray());
+    }
+
+    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
+    {
+        var orientation = MsFormsFactoryBinary.GetInt32(request.Properties, "orientation") ?? DefaultOrientation;
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["parser"] = Parser,
+            ["sizeSource"] = SizeSource,
+            [PropMaskName] = $"0x{PropMask:X8}",
+            ["orientation"] = orientation,
+            ["objectStreamSize"] = objectPayloadSize,
+            ["siteBitFlags"] = $"0x{SiteFlags:X8}",
+            ["tabStop"] = true,
+            ["visible"] = true,
+            ["streamed"] = true
+        };
+    }
+}
+
+internal sealed class ScrollBarControlSchema : SpinLikeControlSchema
+{
+    public override string Type => "ScrollBar";
+    protected override uint PropMask => 0x0000_2008;
+    protected override string Parser => "msOFormsScrollBar";
+    protected override string SizeSource => "scrollBarExtraDataBlock";
+}
+
+internal sealed class SpinButtonControlSchema : SpinLikeControlSchema
+{
+    public override string Type => "SpinButton";
+    protected override uint PropMask => 0x0000_0808;
+    protected override string Parser => "msOFormsSpinButton";
+    protected override string SizeSource => "spinButtonExtraDataBlock";
+}
+
+internal sealed class ImageControlSchema : IGeneratedControlSchema
+{
+    private const uint PropMask = 0x0000_0200;
+
+    public string Type => "Image";
+    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+
+    public byte[] BuildObjectPayload(GeneratedControlRequest request)
+    {
+        using var extra = new MemoryStream();
+        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+        return MsFormsFactoryBinary.BuildVersionedControl(0, 2, PropMask, [], extra.ToArray());
+    }
+
+    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize) =>
+        new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["parser"] = "msOFormsImage",
+            ["sizeSource"] = "imageExtraDataBlock",
+            ["propMask"] = "0x00000200",
+            ["objectStreamSize"] = objectPayloadSize,
+            ["siteBitFlags"] = $"0x{SiteFlags:X8}",
+            ["tabStop"] = true,
+            ["visible"] = true,
+            ["streamed"] = true
+        };
+}
+
+internal sealed class TabStripControlSchema : IGeneratedControlSchema
+{
+    private const uint PropMask = 0x00FA_8031;
+
+    public string Type => "TabStrip";
+    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+
+    public byte[] BuildObjectPayload(GeneratedControlRequest request)
+    {
+        var captions = GetTabCaptions(request);
+        var names = GetTabNames(request, captions);
+        var emptyStrings = Enumerable.Repeat(string.Empty, captions.Count).ToArray();
+        var captionBlock = BuildArrayStringBlock(captions);
+        var tooltipBlock = BuildArrayStringBlock(emptyStrings);
+        var nameBlock = BuildArrayStringBlock(names);
+        var tagBlock = BuildArrayStringBlock(emptyStrings);
+        var acceleratorBlock = BuildArrayStringBlock(emptyStrings);
+
+        using var dataBlock = new MemoryStream();
+        MsFormsFactoryBinary.WriteInt32(dataBlock, 0);
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, checked((uint)captionBlock.Length));
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, checked((uint)tooltipBlock.Length));
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, checked((uint)nameBlock.Length));
+        MsFormsFactoryBinary.WriteInt32(dataBlock, captions.Count + 1);
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, checked((uint)tagBlock.Length));
+        MsFormsFactoryBinary.WriteInt32(dataBlock, captions.Count);
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, checked((uint)acceleratorBlock.Length));
+
+        using var extra = new MemoryStream();
+        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+        extra.Write(captionBlock);
+        extra.Write(tooltipBlock);
+        extra.Write(nameBlock);
+        extra.Write(tagBlock);
+        extra.Write(acceleratorBlock);
+
+        var control = MsFormsFactoryBinary.BuildVersionedControl(0, 2, PropMask, dataBlock.ToArray(), extra.ToArray());
+        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
+
+        using var tabFlags = new MemoryStream();
+        for (var i = 0; i < captions.Count; i++)
+        {
+            MsFormsFactoryBinary.WriteUInt32(tabFlags, 0x0000_0003);
+        }
+
+        return [.. control, .. textProps, .. tabFlags.ToArray()];
+    }
+
+    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
+    {
+        var captions = GetTabCaptions(request);
+        var names = GetTabNames(request, captions);
+        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
+        metadata["parser"] = "msOFormsTabStrip";
+        metadata["sizeSource"] = "tabStripExtraDataBlock";
+        metadata["propMask"] = $"0x{PropMask:X8}";
+        metadata["listIndex"] = 0;
+        metadata["tabsAllocated"] = captions.Count + 1;
+        metadata["tabData"] = captions.Count;
+        metadata["tabCaptions"] = captions;
+        metadata["tabNames"] = names;
+        metadata["objectStreamSize"] = objectPayloadSize;
+        metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
+        metadata["tabStop"] = true;
+        metadata["visible"] = true;
+        metadata["streamed"] = true;
+        return metadata;
+    }
+
+    private static IReadOnlyList<string> GetTabCaptions(GeneratedControlRequest request)
+    {
+        var captions = MsFormsFactoryBinary.GetStringList(request.Properties, "tabCaptions");
+        if (captions is { Count: > 0 })
+        {
+            return captions;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Caption))
+        {
+            return [request.Caption!, "Tab2"];
+        }
+
+        return ["Tab1", "Tab2"];
+    }
+
+    private static IReadOnlyList<string> GetTabNames(GeneratedControlRequest request, IReadOnlyList<string> captions)
+    {
+        var names = MsFormsFactoryBinary.GetStringList(request.Properties, "tabNames");
+        if (names is not null && names.Count == captions.Count)
+        {
+            return names;
+        }
+
+        return captions.Select((_, index) => $"Tab{index + 1}").ToArray();
+    }
+
+    private static byte[] BuildArrayStringBlock(IReadOnlyList<string> values)
+    {
+        using var block = new MemoryStream();
+        foreach (var value in values)
+        {
+            var bytes = Encoding.Latin1.GetBytes(value);
+            MsFormsFactoryBinary.WriteCount(block, bytes.Length, compressed: bytes.Length > 0);
+            block.Write(bytes);
+            MsFormsFactoryBinary.WritePadding(block, 4);
+        }
+
+        return block.ToArray();
+    }
 }
