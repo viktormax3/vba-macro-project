@@ -19,12 +19,15 @@
 - Parent assignment now uses `siteDepth` within a form stream and associates child `f` streams with non-streamed container controls such as frames.
 - MultiPage page sites are now recognized as `Page` controls, including nameless internal-site skipping, so page-owned controls receive page parents.
 - Rebuild mode supports CFB/object/FormSite full patching for property edits, layout edits, renames, add-from-template, move, remove leaf/container/page, and MultiPage page-removal synchronization.
-- `MsForms/Factories/GeneratedControlFactory` can now add `CommandButton`, `Label`, and `TextBox` without `fromTemplate`.
+- `MsForms/Factories/GeneratedControlFactory` can now add `CommandButton`, `Label`, `TextBox`, `CheckBox`, `OptionButton`, and `ToggleButton` without `fromTemplate`.
 - Factory generation is now schema-driven per control type instead of one generic byte builder.
 - `Label` generation now uses label-specific site flags and masks (`siteBitFlags 0x32`, `LabelPropMask 0x28`, `TextPropsPropMask 0x35`) to avoid button-like/default-noise payloads.
 - `TextBox` generation now uses fixture-aligned editable `VariousPropertyBits 0x2C80481B`.
+- `CheckBox`, `OptionButton`, and `ToggleButton` generation now uses fixture-aligned MorphData caption/value baselines with display styles `4`, `5`, and `6`.
+- Added `MsFormsControlSchemaCatalog` as the internal checklist for spec section, parser, masks, TextProps, site flags, and factory readiness per control type.
+- Added `docs/ms-oforms-schema-validation.md` with the strict-inspect baseline for all common controls in `userformallcontrol`.
 - Generated control add writes document-backed `OleSiteConcrete` site bytes plus object payload bytes and re-inspects with strict parser semantic match.
-- Example fixture `examples/rebuild-add-generated.patch.json` demonstrates no-template add for the first three factory-backed controls.
+- Example fixture `examples/rebuild-add-generated.patch.json` demonstrates no-template add for all current leaf factories.
 
 ## Current Code Shape
 
@@ -37,12 +40,13 @@
 - `MsForms/Parsers/`: object stream and text property parsers.
 - `MsForms/Factories/`: document-backed byte factories for controls that no longer require template cloning.
 - `MsForms/Factories/ControlSchemas.cs`: per-control generation contracts; new controls should be added here, not as ad hoc branches in the dispatcher.
+- `MsForms/Schema/MsFormsControlSchemaCatalog.cs`: control readiness/default catalog used to keep factory work aligned with spec-backed parser output.
 - `Frx/Rebuild/`: CFB, FormSiteData, object stream, movement, removal, and patch rebuild logic.
 - `Validation/`: patch validation.
 
 ## Next Targets
 
-1. Add document-backed factories for `CheckBox`, `OptionButton`, `ToggleButton`, `ComboBox`, `ListBox`, `SpinButton`, `ScrollBar`, and `Image` without initial binary picture.
+1. Add document-backed factories for `ComboBox`, `ListBox`, `SpinButton`, `ScrollBar`, and `Image` without initial binary picture.
 2. Add storage factories for `Frame`, `MultiPage`, and `Page`, including empty `f`/`o` stream bootstrapping and class-table generation.
 3. Implement `Page` add/reorder under `MultiPage`, keeping `x`, inner TabStrip, internal sites, and page storages synchronized.
 4. Add `frxedit create` to generate a new `.frm/.frx` pair from zero.

@@ -29,6 +29,36 @@
       "widthPt": 90,
       "heightPt": 18,
       "value": "Hola"
+    },
+    {
+      "type": "CheckBox",
+      "name": "ChkGenerated",
+      "parent": "Frame2",
+      "leftPt": 100,
+      "topPt": 90,
+      "widthPt": 90,
+      "heightPt": 18,
+      "caption": "Check"
+    },
+    {
+      "type": "OptionButton",
+      "name": "OptGenerated",
+      "parent": "Frame2",
+      "leftPt": 100,
+      "topPt": 116,
+      "widthPt": 90,
+      "heightPt": 18,
+      "caption": "Option"
+    },
+    {
+      "type": "ToggleButton",
+      "name": "TglGenerated",
+      "parent": "Frame2",
+      "leftPt": 100,
+      "topPt": 142,
+      "widthPt": 90,
+      "heightPt": 22,
+      "caption": "Toggle"
     }
   ]
 }

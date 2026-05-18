@@ -137,3 +137,83 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         return metadata;
     }
 }
+
+internal abstract class MorphButtonControlSchema : IGeneratedControlSchema
+{
+    private const ulong MorphButtonPropMask = 0x0000_0000_80C0_0146ul;
+    private const uint DefaultBackColor = 0x8000_000F;
+    private const uint DefaultForeColor = 0x8000_0012;
+
+    public abstract string Type { get; }
+    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+    protected abstract byte DisplayStyle { get; }
+    protected virtual uint TextPropsMask => TextPropsFactory.StandardMask;
+
+    public byte[] BuildObjectPayload(GeneratedControlRequest request)
+    {
+        var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? "0";
+        var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        var valueBytes = Encoding.Latin1.GetBytes(value);
+        var captionBytes = Encoding.Latin1.GetBytes(caption);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+
+        using var dataBlock = new MemoryStream();
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
+        dataBlock.WriteByte(DisplayStyle);
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+        MsFormsFactoryBinary.WriteCount(dataBlock, valueBytes.Length);
+        MsFormsFactoryBinary.WriteCount(dataBlock, captionBytes.Length);
+
+        using var extra = new MemoryStream();
+        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+        extra.Write(valueBytes);
+        MsFormsFactoryBinary.WritePadding(extra, 4);
+        extra.Write(captionBytes);
+        MsFormsFactoryBinary.WritePadding(extra, 4);
+
+        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(MorphButtonPropMask, dataBlock.ToArray(), extra.ToArray());
+        var textProps = TextPropsFactory.Build(request.Properties, TextPropsMask);
+        return [.. control, .. textProps];
+    }
+
+    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
+    {
+        var metadata = TextPropsFactory.BuildMetadata(TextPropsMask, request.Properties);
+        metadata["parser"] = "msOFormsMorphData";
+        metadata["controlType"] = Type;
+        metadata["sizeSource"] = "morphDataExtraDataBlock";
+        metadata["propMask"] = "0x0000000080C00146";
+        metadata["backColor"] = MsFormsFactoryBinary.GetString(request.Properties, "backColor") ?? "&H8000000F&";
+        metadata["foreColor"] = MsFormsFactoryBinary.GetString(request.Properties, "foreColor") ?? "&H80000012&";
+        metadata["displayStyle"] = DisplayStyle;
+        metadata["value"] = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? "0";
+        metadata["caption"] = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        metadata["objectStreamSize"] = objectPayloadSize;
+        metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
+        metadata["tabStop"] = true;
+        metadata["visible"] = true;
+        metadata["streamed"] = true;
+        return metadata;
+    }
+}
+
+internal sealed class CheckBoxControlSchema : MorphButtonControlSchema
+{
+    public override string Type => "CheckBox";
+    protected override byte DisplayStyle => 4;
+}
+
+internal sealed class OptionButtonControlSchema : MorphButtonControlSchema
+{
+    public override string Type => "OptionButton";
+    protected override byte DisplayStyle => 5;
+}
+
+internal sealed class ToggleButtonControlSchema : MorphButtonControlSchema
+{
+    public override string Type => "ToggleButton";
+    protected override byte DisplayStyle => 6;
+    protected override uint TextPropsMask => TextPropsFactory.CommandButtonMask;
+}

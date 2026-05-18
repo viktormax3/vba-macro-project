@@ -7,7 +7,10 @@ internal static class GeneratedControlFactory
     [
         new CommandButtonControlSchema(),
         new LabelControlSchema(),
-        new TextBoxControlSchema()
+        new TextBoxControlSchema(),
+        new CheckBoxControlSchema(),
+        new OptionButtonControlSchema(),
+        new ToggleButtonControlSchema()
     ];
 
     public static bool CanCreate(string type) => TryGetSchema(type, out _);
@@ -25,6 +28,12 @@ internal static class GeneratedControlFactory
         string? value,
         Dictionary<string, object?> properties)
     {
+        if (!MsFormsControlSchemaCatalog.TryGet(type, out var catalogEntry) ||
+            catalogEntry.FactoryStatus != FactoryStatus.Ready)
+        {
+            throw new CliException($"Cannot create '{name}': type '{type}' does not have a document-backed factory yet.");
+        }
+
         if (!TryGetSchema(type, out var schema))
         {
             throw new CliException($"Cannot create '{name}': type '{type}' does not have a document-backed factory yet.");

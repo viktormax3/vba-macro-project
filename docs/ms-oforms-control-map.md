@@ -134,6 +134,12 @@ Key fields:
 
 No `TextProps`.
 
+Schema baseline:
+
+- Fixture parser: `msOFormsImage`
+- Fixture propMask: `0x00000600`
+- Current factory status: pending. Initial factory should create Image without picture StreamData, then add binary picture support separately.
+
 ## ScrollBar / SpinButton
 
 Sections: `2.2.7` and `2.2.8`.
@@ -154,11 +160,24 @@ Shared important fields:
 - `MouseIcon`
 - `MousePointer`
 
+Schema baseline:
+
+- `ScrollBar`: parser `msOFormsScrollBar`, fixture propMask `0x00002008`, object size `20`, no `TextProps`.
+- `SpinButton`: parser `msOFormsSpinButton`, fixture propMask `0x00000808`, object size `20`, no `TextProps`.
+- Current factory status: pending.
+
 ## TabStrip
 
 Section: `2.2.9`.
 
 Includes arrays/lists of per-tab values. Requires special handling for array property values and `TabStripTabFlag`.
+
+Schema baseline:
+
+- Fixture parser: `msOFormsTabStrip`
+- Fixture propMask: `0x00FA8031`
+- Fixture TextProps: `0x00000035`
+- Current factory status: pending. This should be implemented after simple leaf factories because tab item arrays and flags need dedicated builders.
 
 ## MorphData
 
@@ -178,6 +197,28 @@ Subtype must be resolved from display/style/class/site metadata, not from object
 Implemented status:
 
 - Parser exists in `MsForms/Parsers/ObjectStreamParser.cs`.
-- First document-backed add schema exists for `TextBox`.
+- First document-backed add schemas exist for `TextBox`, `CheckBox`, `OptionButton`, and `ToggleButton`.
 - Generated `TextBox` uses fixture-aligned editable `VariousPropertyBits = 0x2C80481B`, `TextPropsPropMask = 0x00000035`, and site flags `0x00000013`.
-- `ComboBox`, `ListBox`, `CheckBox`, `OptionButton`, and `ToggleButton` should each get their own schema entry even though they share `MorphDataControl`; their `DisplayStyle`, caption/value fields, colors, and bitfields differ enough that a shared generic builder is unsafe.
+- Generated `CheckBox`, `OptionButton`, and `ToggleButton` use the fixture-aligned `MorphDataControl` caption/value baseline with explicit `BackColor`, `ForeColor`, `DisplayStyle`, `Value`, `Caption`, `Size`, and `TextProps`.
+- `ComboBox` and `ListBox` should each get their own schema entry even though they share `MorphDataControl`; their list fields, column info, value/text fields, and bitfields differ enough that a shared generic builder is unsafe.
+
+Observed fixture baselines:
+
+- `TextBox`: propMask `0x0000000080000101`, TextProps `0x00000035`, VariousPropertyBits `0x2C80481B`.
+- `ComboBox`: propMask `0x0000000080050141`, TextProps `0x00000035`, DisplayStyle `3`, VariousPropertyBits `0x2C80481B`.
+- `ListBox`: propMask `0x0000000080010160`, TextProps `0x00000035`, DisplayStyle `2`.
+- `CheckBox`: propMask `0x0000000080C00146`, TextProps `0x00000035`, DisplayStyle `4`, Value plus Caption.
+- `OptionButton`: propMask `0x0000000080C00146`, TextProps `0x00000035`, DisplayStyle `5`, Value plus Caption.
+- `ToggleButton`: propMask `0x0000000080C00146`, TextProps `0x00000075`, DisplayStyle `6`, Value plus Caption.
+
+## Containers
+
+Sections: `2.2.6`, `2.2.10`.
+
+Storage-backed controls must create both site metadata and child streams/storages.
+
+Observed fixture baselines:
+
+- `Frame`: parser `msOFormsFormSiteData`, site flags `0x00040023`, size source `formControlDisplayedSize`.
+- `MultiPage`: parser `msOFormsFormSiteData`, site flags `0x00040023`, plus `x` stream and inner TabStrip coupling.
+- `Page`: parser `msOFormsFormSiteData`, observed site flags `0x00040021` and `0x00040023`, plus PageProperties in the owning MultiPage `x` stream.
