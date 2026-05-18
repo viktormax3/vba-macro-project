@@ -182,9 +182,14 @@ internal static class RebuildPatchApplier
                 throw new CliException("Each add entry requires a non-empty 'name'.");
             }
 
-            if (string.IsNullOrWhiteSpace(add.FromTemplate))
+            if (string.IsNullOrWhiteSpace(add.FromTemplate) && string.IsNullOrWhiteSpace(add.Type))
             {
-                throw new CliException($"Add entry '{add.Name}' requires 'fromTemplate'. Pass 32 clones an existing control template instead of creating a control from scratch.");
+                throw new CliException($"Add entry '{add.Name}' requires either 'fromTemplate' or 'type'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(add.FromTemplate) && !GeneratedControlFactory.CanCreate(add.Type!))
+            {
+                throw new CliException($"Add entry '{add.Name}' requested type '{add.Type}', but this build can create only: CommandButton, Label, TextBox. Use 'fromTemplate' for other types.");
             }
         }
     }
@@ -418,20 +423,27 @@ internal static class RebuildPatchApplier
                 throw new CliException($"Add target '{name}' would duplicate an existing control.");
             }
 
-            var template = templateControls.FirstOrDefault(c => c.Name.Equals(add.FromTemplate, StringComparison.OrdinalIgnoreCase))
-                ?? throw new CliException($"Add template '{add.FromTemplate}' does not exist.");
+            var hasTemplate = !string.IsNullOrWhiteSpace(add.FromTemplate);
+            var template = hasTemplate
+                ? templateControls.FirstOrDefault(c => c.Name.Equals(add.FromTemplate!, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new CliException($"Add template '{add.FromTemplate}' does not exist.")
+                : null;
 
-            if (!string.IsNullOrWhiteSpace(add.Type) && !template.Type.Equals(add.Type, StringComparison.OrdinalIgnoreCase))
+            var type = add.Type?.Trim();
+            if (template is not null)
             {
-                throw new CliException($"Add target '{name}' requested type '{add.Type}', but template '{template.Name}' is type '{template.Type}'. Pass 32 only supports same-type template clones.");
+                type ??= template.Type;
+                if (!template.Type.Equals(type, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new CliException($"Add target '{name}' requested type '{type}', but template '{template.Name}' is type '{template.Type}'. Template clones must keep the same type.");
+                }
+            }
+            else if (string.IsNullOrWhiteSpace(type))
+            {
+                throw new CliException($"Add target '{name}' requires 'type' when no fromTemplate is supplied.");
             }
 
-            var parent = add.Parent is null ? template.Parent : (string.IsNullOrWhiteSpace(add.Parent) ? null : add.Parent.Trim());
-
-            if (template.Properties is null)
-            {
-                throw new CliException($"Add template '{template.Name}' has no structured metadata.");
-            }
+            var parent = add.Parent is null ? template?.Parent : (string.IsNullOrWhiteSpace(add.Parent) ? null : add.Parent.Trim());
 
             var targetStoragePath = ResolveTargetStoragePath(parent, existingControls);
             var targetStreamPath = $"{targetStoragePath}/f";
@@ -440,19 +452,29 @@ internal static class RebuildPatchApplier
                 throw new CliException($"Add target '{name}' cannot target '{parent ?? "<root>"}': this pass requires at least one existing child in the target FormSiteData stream so CountOfSites/CountOfBytes/ClassTable metadata can be rebuilt safely.");
             }
 
-            if (!TryGetString(template.Properties, "storagePath", out var templateStoragePath) || string.IsNullOrWhiteSpace(templateStoragePath) ||
-                !TryGetString(template.Properties, "streamPath", out var templateStreamPath) || string.IsNullOrWhiteSpace(templateStreamPath))
+            if (template is not null && template.Properties is null)
             {
-                throw new CliException($"Add template '{template.Name}' is missing storagePath/streamPath metadata.");
+                throw new CliException($"Add template '{template.Name}' has no structured metadata.");
             }
 
-            var props = new Dictionary<string, object?>(template.Properties, StringComparer.OrdinalIgnoreCase);
+            var props = template?.Properties is not null
+                ? new Dictionary<string, object?>(template.Properties, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             maxId++;
             props["isAddedControl"] = true;
-            props["templateControlName"] = template.Name;
-            props["templateStoragePath"] = templateStoragePath;
-            props["templateStreamPath"] = templateStreamPath;
-            props["templateObjectStreamPath"] = $"{templateStoragePath}/o";
+            if (template is not null)
+            {
+                if (!TryGetString(template.Properties!, "storagePath", out var templateStoragePath) || string.IsNullOrWhiteSpace(templateStoragePath) ||
+                    !TryGetString(template.Properties!, "streamPath", out var templateStreamPath) || string.IsNullOrWhiteSpace(templateStreamPath))
+                {
+                    throw new CliException($"Add template '{template.Name}' is missing storagePath/streamPath metadata.");
+                }
+
+                props["templateControlName"] = template.Name;
+                props["templateStoragePath"] = templateStoragePath;
+                props["templateStreamPath"] = templateStreamPath;
+                props["templateObjectStreamPath"] = $"{templateStoragePath}/o";
+            }
             props["storagePath"] = targetStoragePath;
             props["streamPath"] = targetStreamPath;
             props["name"] = name;
@@ -479,12 +501,93 @@ internal static class RebuildPatchApplier
                 ApplyPropertyToDictionary(name, props, propertyName, value);
             }
 
-            var left = add.Left ?? ToRawPoints(add.LeftPt) ?? template.Left;
-            var top = add.Top ?? ToRawPoints(add.TopPt) ?? template.Top;
-            var rawWidth = add.RawWidth ?? add.Width ?? ToRawPoints(add.WidthPt) ?? template.RawWidth;
-            var rawHeight = add.RawHeight ?? add.Height ?? ToRawPoints(add.HeightPt) ?? template.RawHeight;
+            var left = add.Left ?? ToRawPoints(add.LeftPt) ?? template?.Left ?? 0;
+            var top = add.Top ?? ToRawPoints(add.TopPt) ?? template?.Top ?? 0;
+            var rawWidth = add.RawWidth ?? add.Width ?? ToRawPoints(add.WidthPt) ?? template?.RawWidth;
+            var rawHeight = add.RawHeight ?? add.Height ?? ToRawPoints(add.HeightPt) ?? template?.RawHeight;
 
-            result.Add(template with
+            if (template is null)
+            {
+                var generated = GeneratedControlFactory.Create(
+                    type!,
+                    name,
+                    maxId,
+                    (int)props["tabIndex"]!,
+                    left,
+                    top,
+                    rawWidth,
+                    rawHeight,
+                    add.Caption,
+                    add.Value,
+                    props);
+
+                props["generatedFormSitePayload"] = generated.SitePayload;
+                props["generatedObjectPayload"] = generated.ObjectPayload;
+                props["siteParser"] = "msOFormsOleSiteConcrete";
+                props["parser"] = type!.Equals("CommandButton", StringComparison.OrdinalIgnoreCase)
+                    ? "msOFormsCommandButton"
+                    : type.Equals("Label", StringComparison.OrdinalIgnoreCase)
+                        ? "msOFormsLabel"
+                        : "msOFormsMorphData";
+                props["siteDepth"] = 0;
+                props["siteType"] = 1;
+                props["siteLocalOffset"] = 0;
+                props["cbSite"] = generated.SitePayload.Length - 4;
+                props["objectStreamLocalOffset"] = 0;
+                props["objectStreamSize"] = generated.ObjectPayload.Length;
+                props["siteObjectStreamSize"] = generated.ObjectPayload.Length;
+                props["objectStreamSizeFromSite"] = generated.ObjectPayload.Length;
+
+                if (type!.Equals("CommandButton", StringComparison.OrdinalIgnoreCase))
+                {
+                    props.TryAdd("backColor", "&H8000000F&");
+                    props.TryAdd("foreColor", "&H80000012&");
+                    props.TryAdd("fontName", "Tahoma");
+                    props.TryAdd("fontSize", 8.0);
+                    props["sizeSource"] = "commandButtonExtraDataBlock";
+                }
+                else if (type.Equals("Label", StringComparison.OrdinalIgnoreCase))
+                {
+                    props.TryAdd("backColor", "&H8000000F&");
+                    props.TryAdd("foreColor", "&H80000012&");
+                    props.TryAdd("fontName", "Tahoma");
+                    props.TryAdd("fontSize", 8.0);
+                    props["sizeSource"] = "labelExtraDataBlock";
+                }
+                else if (type.Equals("TextBox", StringComparison.OrdinalIgnoreCase))
+                {
+                    props.TryAdd("backColor", "&H80000005&");
+                    props.TryAdd("foreColor", "&H80000008&");
+                    props.TryAdd("fontName", "Tahoma");
+                    props.TryAdd("fontSize", 8.0);
+                    props["sizeSource"] = "morphDataExtraDataBlock";
+                }
+            }
+
+            var source = template ?? new ControlInfo(
+                name,
+                type!,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                parent,
+                null,
+                null,
+                null,
+                null,
+                0,
+                null,
+                null,
+                null,
+                null);
+
+            result.Add(source with
             {
                 Name = name,
                 Parent = parent,
@@ -492,10 +595,10 @@ internal static class RebuildPatchApplier
                 Top = top,
                 RawWidth = rawWidth,
                 RawHeight = rawHeight,
-                LeftPt = left is int l ? FromRawPoints(l) : template.LeftPt,
-                TopPt = top is int t ? FromRawPoints(t) : template.TopPt,
-                WidthPt = rawWidth is int w ? FromRawPoints(w) : template.WidthPt,
-                HeightPt = rawHeight is int h ? FromRawPoints(h) : template.HeightPt,
+                LeftPt = left is int l ? FromRawPoints(l) : source.LeftPt,
+                TopPt = top is int t ? FromRawPoints(t) : source.TopPt,
+                WidthPt = rawWidth is int w ? FromRawPoints(w) : source.WidthPt,
+                HeightPt = rawHeight is int h ? FromRawPoints(h) : source.HeightPt,
                 Properties = props
             });
         }

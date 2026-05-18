@@ -301,7 +301,7 @@ internal static class ObjectStreamRoundTripRewriter
         if (TryGetInt(props, "tabDataLocalOffset", out var tabDataOffset)) BinaryPrimitives.WriteInt32LittleEndian(dataBlock.AsSpan(tabDataOffset, 4), pages.Count);
 
         var cbTabStrip = dataBlock.Length - 4 + extraDataBytes.Length;
-        BinaryPrimitives.WriteUInt16LittleEndian(dataBlock.AsSpan(4, 2), (ushort)cbTabStrip);
+        BinaryPrimitives.WriteUInt16LittleEndian(dataBlock.AsSpan(2, 2), (ushort)cbTabStrip);
 
         var newStream = new MemoryStream();
         newStream.Write(dataBlock);
@@ -355,7 +355,7 @@ internal static class ObjectStreamRoundTripRewriter
     private static byte[] SerializeArrayString(IReadOnlyList<ControlInfo> pages, Dictionary<string, object?> tabStripProps, string propertyName, Func<ControlInfo, string> fallback)
     {
         var entries = new List<Dictionary<string, object?>>();
-        if (TryGetObjectList(tabStripProps, propertyName, out var originalEntries))
+        if (TryGetObjectList(tabStripProps, propertyName + "Entries", out var originalEntries))
         {
             entries = originalEntries;
         }
@@ -646,14 +646,24 @@ internal static class ObjectStreamRoundTripRewriter
 
         foreach (var addition in additions)
         {
-            var sourceFormStream = ResolveSourceStream(streamsByPath, addition.SourceStreamPath, formStream.Path, $"added site template for '{addition.Control.Name}'");
-            if (addition.Start < 0 || addition.Start + addition.Size > sourceFormStream.Data.Length)
+            byte[] sitePayload;
+            if (addition.Control.Properties is not null &&
+                TryGetByteArray(addition.Control.Properties, "generatedFormSitePayload", out var generatedSitePayload))
             {
-                throw new CliException($"Cannot add '{addition.Control.Name}' to form stream '{formStream.Path}': template site slice exceeds source stream '{sourceFormStream.Path}' length.");
+                sitePayload = generatedSitePayload;
+            }
+            else
+            {
+                var sourceFormStream = ResolveSourceStream(streamsByPath, addition.SourceStreamPath, formStream.Path, $"added site template for '{addition.Control.Name}'");
+                if (addition.Start < 0 || addition.Start + addition.Size > sourceFormStream.Data.Length)
+                {
+                    throw new CliException($"Cannot add '{addition.Control.Name}' to form stream '{formStream.Path}': template site slice exceeds source stream '{sourceFormStream.Path}' length.");
+                }
+
+                objectSizeUpdatesByControl.TryGetValue(addition.Control.Name, out var newObjectSize);
+                sitePayload = SerializeFormSite(addition.Control, sourceFormStream, sourceFormStream.Data.AsSpan(addition.Start, addition.Size), addition.Start, newObjectSize);
             }
 
-            objectSizeUpdatesByControl.TryGetValue(addition.Control.Name, out var newObjectSize);
-            var sitePayload = SerializeFormSite(addition.Control, sourceFormStream, sourceFormStream.Data.AsSpan(addition.Start, addition.Size), addition.Start, newObjectSize);
             totalDelta += sitePayload.Length;
             output.Write(sitePayload, 0, sitePayload.Length);
         }
@@ -871,6 +881,12 @@ internal static class ObjectStreamRoundTripRewriter
             var props = control.Properties;
             if (props is null || !IsAddedControl(props))
             {
+                continue;
+            }
+
+            if (TryGetByteArray(props, "generatedFormSitePayload", out var generatedSite))
+            {
+                result.Add(new FormSiteSlice(control, 0, generatedSite.Length, formStream.Path ?? string.Empty));
                 continue;
             }
 
@@ -1422,11 +1438,23 @@ internal static class ObjectStreamRoundTripRewriter
                 continue;
             }
 
-            if (!TryGetString(props, "storagePath", out var storagePath) || string.IsNullOrWhiteSpace(storagePath) ||
-                !TryGetInt(props, "objectStreamLocalOffset", out var templateStart) ||
+            if (!TryGetString(props, "storagePath", out var storagePath) || string.IsNullOrWhiteSpace(storagePath))
+            {
+                throw new CliException($"Cannot add '{control.Name}': missing target storagePath metadata.");
+            }
+
+            if (!TryGetInt(props, "objectStreamLocalOffset", out var templateStart) ||
                 !TryGetInt(props, "objectStreamSize", out var templateSize) || templateSize <= 0)
             {
-                throw new CliException($"Cannot add '{control.Name}': template is missing object stream slice metadata.");
+                if (TryGetByteArray(props, "generatedObjectPayload", out var generatedObject))
+                {
+                    templateStart = 0;
+                    templateSize = generatedObject.Length;
+                }
+                else
+                {
+                    throw new CliException($"Cannot add '{control.Name}': template is missing object stream slice metadata.");
+                }
             }
 
             var objectStreamPath = $"{storagePath}/o";
@@ -1565,22 +1593,37 @@ internal static class ObjectStreamRoundTripRewriter
 
         foreach (var addition in additions)
         {
-            var sourceObjectStream = ResolveSourceStream(streamsByPath, addition.SourceStreamPath, path, $"added object template for '{addition.Control.Name}'");
-            if (addition.Start < 0 || addition.Start + addition.Size > sourceObjectStream.Data.Length)
+            byte[] payload;
+            var isGeneratedPayload = false;
+            if (addition.Control.Properties is not null &&
+                TryGetByteArray(addition.Control.Properties, "generatedObjectPayload", out var generatedObjectPayload))
             {
-                throw new CliException($"Cannot add '{addition.Control.Name}' to object stream '{path}': template slice exceeds source stream '{sourceObjectStream.Path}' length.");
+                payload = generatedObjectPayload;
+                isGeneratedPayload = true;
+            }
+            else
+            {
+                var sourceObjectStream = ResolveSourceStream(streamsByPath, addition.SourceStreamPath, path, $"added object template for '{addition.Control.Name}'");
+                if (addition.Start < 0 || addition.Start + addition.Size > sourceObjectStream.Data.Length)
+                {
+                    throw new CliException($"Cannot add '{addition.Control.Name}' to object stream '{path}': template slice exceeds source stream '{sourceObjectStream.Path}' length.");
+                }
+
+                var originalPayload = sourceObjectStream.Data.AsSpan(addition.Start, addition.Size);
+                payload = mode switch
+                {
+                    ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(addition.Control, originalPayload),
+                    ObjectStreamRewriteMode.NormalizeStrings => ObjectPayloadSerializer.SerializeNormalizedStrings(addition.Control, originalPayload),
+                    ObjectStreamRewriteMode.PatchProperties or ObjectStreamRewriteMode.FormAndObjectPatch => ObjectPayloadSerializer.SerializePatchedProperties(addition.Control, originalPayload),
+                    _ => originalPayload.ToArray()
+                };
             }
 
-            var originalPayload = sourceObjectStream.Data.AsSpan(addition.Start, addition.Size);
-            var payload = mode switch
+            if (!isGeneratedPayload)
             {
-                ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(addition.Control, originalPayload),
-                ObjectStreamRewriteMode.NormalizeStrings => ObjectPayloadSerializer.SerializeNormalizedStrings(addition.Control, originalPayload),
-                ObjectStreamRewriteMode.PatchProperties or ObjectStreamRewriteMode.FormAndObjectPatch => ObjectPayloadSerializer.SerializePatchedProperties(addition.Control, originalPayload),
-                _ => originalPayload.ToArray()
-            };
+                AddSizeUpdate(addition.Control, payload.Length, sizeUpdates);
+            }
 
-            AddSizeUpdate(addition.Control, payload.Length, sizeUpdates);
             output.Write(payload, 0, payload.Length);
         }
 
@@ -1627,6 +1670,23 @@ internal static class ObjectStreamRoundTripRewriter
 
         value = raw.ToString() ?? string.Empty;
         return !string.IsNullOrEmpty(value);
+    }
+
+    private static bool TryGetByteArray(Dictionary<string, object?> props, string key, out byte[] value)
+    {
+        value = [];
+        if (!props.TryGetValue(key, out var raw) || raw is null)
+        {
+            return false;
+        }
+
+        if (raw is byte[] bytes)
+        {
+            value = bytes;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryGetInt(Dictionary<string, object?> props, string key, out int value)

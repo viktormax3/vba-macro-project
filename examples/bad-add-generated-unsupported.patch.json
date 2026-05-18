@@ -1,0 +1,13 @@
+{
+  "add": [
+    {
+      "type": "ComboBox",
+      "name": "ComboGenerated",
+      "parent": "Frame2",
+      "leftPt": 12,
+      "topPt": 120,
+      "widthPt": 90,
+      "heightPt": 18
+    }
+  ]
+}

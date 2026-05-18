@@ -9,6 +9,7 @@ dotnet run --project src/FrxEdit.Cli -- inspect UserForm1.frm --out layout.json
 dotnet run --project src/FrxEdit.Cli -- inspect UserForm1.frm --out layout.json --raw-out layout.raw.json
 dotnet run --project src/FrxEdit.Cli -- apply UserForm1.frm sample.patch.json --out UserForm1.patched.frm
 dotnet run --project src/FrxEdit.Cli -- validate UserForm1.patched.frm
+dotnet run --project src/FrxEdit.Cli -- rebuild userformallcontrol.frm --out out/userformallcontrol.rebuilt.frm --mode strict --stream-mode full-patch --patch examples/rebuild-add-generated.patch.json --report-out out/userformallcontrol.rebuilt.report.json
 dotnet run --project src/FrxEdit.Cli -- dump-records UserForm1.frm --around TextBox3 --before 4 --after 6 --out records.json
 dotnet run --project src/FrxEdit.Cli -- dump-storage UserForm1.frm --out storage.json
 ```
@@ -24,7 +25,7 @@ If a sibling `UserForm1.scopes.json` file exists, `inspect` uses it to add each 
 Position fields are emitted twice: raw FRX units (`left`, `top`) and normalized VBA property-grid points (`leftPt`, `topPt`). Nearby size-like bytes are emitted as `rawWidth`/`rawHeight`; they are not the VBA property-grid `Width`/`Height` for every control type.
 `dump-storage` lists the OLE compound streams inside the FRX and scans each stream for embedded resource signatures such as ICO and DIB. For ICO payloads it also reports the calculated icon length and, when present, the MSForms picture header that precedes the payload.
 
-## Patch format
+## Patch Format
 
 ```json
 {
@@ -48,13 +49,38 @@ Position fields are emitted twice: raw FRX units (`left`, `top`) and normalized 
 ```
 
 `apply` writes copies: the original `.frm/.frx` are not modified. The output `.frm` points its `OleObjectBlob` at the sibling output `.frx`.
-Property writes are conservative and in-place. This currently supports discovered writable offsets such as `caption`, `tag`, `controlTipText`, `fontName`, `fontSize`, `backColor`, `foreColor`, and `tabIndex`; strings must fit in the existing binary field until stream growth is implemented.
-`CommandButton` object streams are parsed from the `[MS-OFORMS]` `CommandButtonControl` layout (`PropMask`, `DataBlock`, `ExtraDataBlock`, and `TextProps`) instead of nearby-byte guessing.
+`apply` remains the conservative compatibility path for simple copies and in-place edits.
 
-## Current v1 limits
+Use `rebuild --stream-mode full-patch` for structural editing. It rebuilds CFB streams and supports renames, layout changes, property changes, moving controls between compatible parents, removing leaf/container/page subtrees, adding from a template, and the first document-backed adds without a template.
 
-- Renames must be the same length as the original control name or shorter. Shorter names are padded in-place inside the binary FRX.
-- Adding controls is reserved in the JSON shape but intentionally rejected until cloning/templates are implemented.
-- The FRX parser is conservative and focused on MSForms controls found in this project. It validates the OLE compound signature and patches discovered byte offsets directly.
-- `width`/`height` patch fields are intentionally rejected until the real MSForms size records are mapped by control type. `rawWidth`/`rawHeight` are available only for low-level experiments.
-- Captions/text for child controls are intentionally omitted for now. Earlier guesses from nearby bytes were noisy for grouped controls, so v1 only reports properties it can patch or identify with confidence. UserForm-level textual properties are read from the `.frm` header.
+Example generated add without `fromTemplate`:
+
+```json
+{
+  "add": [
+    {
+      "type": "CommandButton",
+      "name": "BtnGenerated",
+      "parent": "Frame2",
+      "leftPt": 12,
+      "topPt": 64,
+      "widthPt": 82,
+      "heightPt": 22,
+      "caption": "Generado"
+    }
+  ]
+}
+```
+
+The first factory-backed types are `CommandButton`, `Label`, and `TextBox`. Other common controls can still be added through `fromTemplate` while their document-backed factories are implemented.
+`parent` can target the root form, a `Frame`, or a `Page` for common controls. Direct common-control add to `MultiPage` is rejected; pages belong under `MultiPage`.
+
+Object streams are parsed from `[MS-OFORMS]` layouts (`PropMask`, `DataBlock`, `ExtraDataBlock`, `TextProps`, and MorphData where applicable) instead of nearby-byte guessing.
+
+## Current Limits
+
+- The document-backed factory layer currently creates `CommandButton`, `Label`, and `TextBox` only.
+- Creating a complete UserForm from zero is still pending; current rebuilds start from an existing `.frm/.frx` pair.
+- Adding into an empty target `FormSiteData` stream is intentionally guarded until the site/class-table bootstrap path is implemented.
+- `MultiPage` page add/reorder and full new `MultiPage` creation are still the next factory/storage milestone.
+- Compatibility must still be confirmed by importing generated outputs in both Corel and Office/VBA; strict parser validation is necessary but not the final acceptance signal.

@@ -18,6 +18,10 @@
 - `FormSiteData` / `OleSiteConcrete` parsing now provides spec-backed site name, type cache index, position, tabIndex, flags, tag, controlTipText, and object stream size when present.
 - Parent assignment now uses `siteDepth` within a form stream and associates child `f` streams with non-streamed container controls such as frames.
 - MultiPage page sites are now recognized as `Page` controls, including nameless internal-site skipping, so page-owned controls receive page parents.
+- Rebuild mode supports CFB/object/FormSite full patching for property edits, layout edits, renames, add-from-template, move, remove leaf/container/page, and MultiPage page-removal synchronization.
+- `MsForms/Factories/GeneratedControlFactory` can now add `CommandButton`, `Label`, and `TextBox` without `fromTemplate`.
+- Generated control add writes document-backed `OleSiteConcrete` site bytes plus object payload bytes and re-inspects with strict parser semantic match.
+- Example fixture `examples/rebuild-add-generated.patch.json` demonstrates no-template add for the first three factory-backed controls.
 
 ## Current Code Shape
 
@@ -28,15 +32,17 @@
 - `MsForms/Model/`: JSON documents, control records, patch records, and shared model types.
 - `MsForms/Binary/`: low-level `[MS-OFORMS]` binary helpers.
 - `MsForms/Parsers/`: object stream and text property parsers.
+- `MsForms/Factories/`: document-backed byte factories for controls that no longer require template cloning.
+- `Frx/Rebuild/`: CFB, FormSiteData, object stream, movement, removal, and patch rebuild logic.
 - `Validation/`: patch validation.
 
-## Next Parser Targets
+## Next Targets
 
-1. Add compact `[MS-OFORMS]` schemas per control type.
-2. Parse the MultiPage `x` stream to enrich `Page` records with page properties and page IDs.
-3. Replace remaining nearby-string fallback with site data where possible.
-4. Add control parsers in this order: `CommandButton`, `Label`, `Image`, `SpinButton`, `ScrollBar`, `TabStrip`, `MorphData`.
-5. Add stream rebuilders after parser outputs are stable.
+1. Add document-backed factories for `CheckBox`, `OptionButton`, `ToggleButton`, `ComboBox`, `ListBox`, `SpinButton`, `ScrollBar`, and `Image` without initial binary picture.
+2. Add storage factories for `Frame`, `MultiPage`, and `Page`, including empty `f`/`o` stream bootstrapping and class-table generation.
+3. Implement `Page` add/reorder under `MultiPage`, keeping `x`, inner TabStrip, internal sites, and page storages synchronized.
+4. Add `frxedit create` to generate a new `.frm/.frx` pair from zero.
+5. Run import validation in Corel and Office/VBA as the final acceptance layer.
 
 ## Working Rule
 

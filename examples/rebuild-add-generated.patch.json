@@ -1,0 +1,34 @@
+{
+  "add": [
+    {
+      "type": "CommandButton",
+      "name": "BtnGenerated",
+      "parent": "Frame2",
+      "leftPt": 12,
+      "topPt": 64,
+      "widthPt": 82,
+      "heightPt": 22,
+      "caption": "Generado"
+    },
+    {
+      "type": "Label",
+      "name": "LblGenerated",
+      "parent": "Frame2",
+      "leftPt": 12,
+      "topPt": 92,
+      "widthPt": 82,
+      "heightPt": 14,
+      "caption": "Sin plantilla"
+    },
+    {
+      "type": "TextBox",
+      "name": "TxtGenerated",
+      "parent": "Frame2",
+      "leftPt": 100,
+      "topPt": 64,
+      "widthPt": 90,
+      "heightPt": 18,
+      "value": "Hola"
+    }
+  ]
+}
