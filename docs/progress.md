@@ -20,6 +20,9 @@
 - MultiPage page sites are now recognized as `Page` controls, including nameless internal-site skipping, so page-owned controls receive page parents.
 - Rebuild mode supports CFB/object/FormSite full patching for property edits, layout edits, renames, add-from-template, move, remove leaf/container/page, and MultiPage page-removal synchronization.
 - `MsForms/Factories/GeneratedControlFactory` can now add `CommandButton`, `Label`, and `TextBox` without `fromTemplate`.
+- Factory generation is now schema-driven per control type instead of one generic byte builder.
+- `Label` generation now uses label-specific site flags and masks (`siteBitFlags 0x32`, `LabelPropMask 0x28`, `TextPropsPropMask 0x35`) to avoid button-like/default-noise payloads.
+- `TextBox` generation now uses fixture-aligned editable `VariousPropertyBits 0x2C80481B`.
 - Generated control add writes document-backed `OleSiteConcrete` site bytes plus object payload bytes and re-inspects with strict parser semantic match.
 - Example fixture `examples/rebuild-add-generated.patch.json` demonstrates no-template add for the first three factory-backed controls.
 
@@ -33,6 +36,7 @@
 - `MsForms/Binary/`: low-level `[MS-OFORMS]` binary helpers.
 - `MsForms/Parsers/`: object stream and text property parsers.
 - `MsForms/Factories/`: document-backed byte factories for controls that no longer require template cloning.
+- `MsForms/Factories/ControlSchemas.cs`: per-control generation contracts; new controls should be added here, not as ad hoc branches in the dispatcher.
 - `Frx/Rebuild/`: CFB, FormSiteData, object stream, movement, removal, and patch rebuild logic.
 - `Validation/`: patch validation.
 

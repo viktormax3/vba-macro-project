@@ -538,29 +538,9 @@ internal static class RebuildPatchApplier
                 props["siteObjectStreamSize"] = generated.ObjectPayload.Length;
                 props["objectStreamSizeFromSite"] = generated.ObjectPayload.Length;
 
-                if (type!.Equals("CommandButton", StringComparison.OrdinalIgnoreCase))
+                foreach (var (propertyName, propertyValue) in generated.Metadata)
                 {
-                    props.TryAdd("backColor", "&H8000000F&");
-                    props.TryAdd("foreColor", "&H80000012&");
-                    props.TryAdd("fontName", "Tahoma");
-                    props.TryAdd("fontSize", 8.0);
-                    props["sizeSource"] = "commandButtonExtraDataBlock";
-                }
-                else if (type.Equals("Label", StringComparison.OrdinalIgnoreCase))
-                {
-                    props.TryAdd("backColor", "&H8000000F&");
-                    props.TryAdd("foreColor", "&H80000012&");
-                    props.TryAdd("fontName", "Tahoma");
-                    props.TryAdd("fontSize", 8.0);
-                    props["sizeSource"] = "labelExtraDataBlock";
-                }
-                else if (type.Equals("TextBox", StringComparison.OrdinalIgnoreCase))
-                {
-                    props.TryAdd("backColor", "&H80000005&");
-                    props.TryAdd("foreColor", "&H80000008&");
-                    props.TryAdd("fontName", "Tahoma");
-                    props.TryAdd("fontSize", 8.0);
-                    props["sizeSource"] = "morphDataExtraDataBlock";
+                    props[propertyName] = propertyValue;
                 }
             }
 

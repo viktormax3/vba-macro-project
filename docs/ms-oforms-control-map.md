@@ -87,8 +87,10 @@ PropMask bits:
 
 Implemented status:
 
-- Parser exists in `FrxBinary` and should be moved to `MsForms/Parsers/CommandButtonParser.cs`.
-- Writer is still in-place only and should become a stream rebuilder.
+- Parser exists in `MsForms/Parsers/ObjectStreamParser.cs`.
+- Document-backed add schema exists in `MsForms/Factories/ControlSchemas.cs`.
+- Minimal generated object payload uses `CommandButtonPropMask = 0x00000028` (`Caption` + `Size`) plus `TextPropsPropMask = 0x00000075`.
+- Generated site flags use `0x00000013` (`tabStop`, `visible`, `streamed`).
 
 ## Label
 
@@ -101,6 +103,14 @@ Similar to `CommandButton`, plus:
 - `SpecialEffect`
 
 Uses `TextProps`.
+
+Implemented status:
+
+- Parser exists in `MsForms/Parsers/ObjectStreamParser.cs`.
+- Document-backed add schema exists in `MsForms/Factories/ControlSchemas.cs`.
+- Minimal generated object payload uses `LabelPropMask = 0x00000028` (`Caption` + `Size`) plus `TextPropsPropMask = 0x00000035`.
+- Generated site flags use `0x00000032` (`visible`, `streamed`, `autoSize`) and intentionally do not set `tabStop`.
+- Do not emit default `ForeColor`, `BackColor`, `VariousPropertyBits`, `BorderStyle`, or `SpecialEffect` unless a patch explicitly requests a non-default value.
 
 ## Image
 
@@ -164,3 +174,10 @@ Aggregate backing format for:
 - `ListBox`
 
 Subtype must be resolved from display/style/class/site metadata, not from object name.
+
+Implemented status:
+
+- Parser exists in `MsForms/Parsers/ObjectStreamParser.cs`.
+- First document-backed add schema exists for `TextBox`.
+- Generated `TextBox` uses fixture-aligned editable `VariousPropertyBits = 0x2C80481B`, `TextPropsPropMask = 0x00000035`, and site flags `0x00000013`.
+- `ComboBox`, `ListBox`, `CheckBox`, `OptionButton`, and `ToggleButton` should each get their own schema entry even though they share `MorphDataControl`; their `DisplayStyle`, caption/value fields, colors, and bitfields differ enough that a shared generic builder is unsafe.
