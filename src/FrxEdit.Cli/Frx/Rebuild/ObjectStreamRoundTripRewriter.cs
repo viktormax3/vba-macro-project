@@ -33,6 +33,13 @@ internal static class ObjectStreamRoundTripRewriter
                 continue;
             }
 
+            if (mode == ObjectStreamRewriteMode.FormAndObjectPatch &&
+                TryRewriteMultiPageInnerTabStripStream(stream, layout, sizeUpdates, out var rewrittenTabStripStream))
+            {
+                rewrittenObjectStreams[stream.Path] = rewrittenTabStripStream;
+                continue;
+            }
+
             slicesByObjectStreamPath.TryGetValue(stream.Path, out var slices);
             additionsByObjectStreamPath.TryGetValue(stream.Path, out var additions);
             removalsByObjectStreamPath.TryGetValue(stream.Path, out var removals);
@@ -117,15 +124,6 @@ internal static class ObjectStreamRoundTripRewriter
                 TryRewriteMultiPageXStream(stream, layout, out var rewrittenXStream))
             {
                 return WithNewData(stream, rewrittenXStream);
-            }
-
-            if (mode == ObjectStreamRewriteMode.FormAndObjectPatch &&
-                !string.IsNullOrWhiteSpace(stream.Path) &&
-                stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
-                stream.Name.Equals("o", StringComparison.OrdinalIgnoreCase) &&
-                TryRewriteMultiPageInnerTabStripStream(stream, layout, updatesByFormStreamPath, out var rewrittenTabStripStream))
-            {
-                return WithNewData(stream, rewrittenTabStripStream);
             }
 
             return stream;
@@ -241,7 +239,7 @@ internal static class ObjectStreamRoundTripRewriter
     private static bool TryRewriteMultiPageInnerTabStripStream(
         StorageEntryDump oStream,
         LayoutInspection layout,
-        Dictionary<string, List<ObjectStreamSizeUpdate>> updatesByFormStreamPath,
+        List<ObjectStreamSizeUpdate> sizeUpdates,
         out byte[] rewritten)
     {
         rewritten = [];
@@ -250,8 +248,9 @@ internal static class ObjectStreamRoundTripRewriter
         var multiPage = layout.Controls.FirstOrDefault(control =>
             control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase) &&
             control.Properties is not null &&
-            TryGetString(control.Properties, "storagePath", out var storagePath) &&
-            $"{storagePath}/o".Equals(oStream.Path, StringComparison.OrdinalIgnoreCase));
+            TryGetString(control.Properties, "multiPageXStreamPath", out var xStreamPath) &&
+            xStreamPath.EndsWith("/x", StringComparison.OrdinalIgnoreCase) &&
+            (xStreamPath.Substring(0, xStreamPath.Length - 2) + "/o").Equals(oStream.Path, StringComparison.OrdinalIgnoreCase));
 
         if (multiPage?.Properties is null) return false;
         if (!TryGetInt(multiPage.Properties, "multiPagePageCount", out var originalPageCount)) return false;
@@ -348,12 +347,7 @@ internal static class ObjectStreamRoundTripRewriter
 
         var multiPageStoragePath = oStream.Path.Substring(0, oStream.Path.Length - 2);
         var fPath = $"{multiPageStoragePath}/f";
-        if (!updatesByFormStreamPath.TryGetValue(fPath, out var updates))
-        {
-            updates = new List<ObjectStreamSizeUpdate>();
-            updatesByFormStreamPath[fPath] = updates;
-        }
-        updates.Add(new ObjectStreamSizeUpdate("__internal_site_0_TabStrip", fPath, 0, rewritten.Length));
+        sizeUpdates.Add(new ObjectStreamSizeUpdate("__internal_site_0_TabStrip", fPath, 0, rewritten.Length));
 
         return true;
     }
