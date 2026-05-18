@@ -1,4 +1,4 @@
-﻿internal static class StreamRecordInspector
+internal static class StreamRecordInspector
 {
     private static readonly HashSet<byte> KnownTypeCodes = new([0x0C, 0x0E, 0x10, 0x11, 0x12, 0x15, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x2F, 0x39]);
 
@@ -226,9 +226,14 @@ internal sealed record StorageDirectoryEntry(
     int Index,
     string Name,
     byte Type,
+    byte Color,
     int LeftSiblingId,
     int RightSiblingId,
     int ChildId,
+    string ClsidHex,
+    uint StateBits,
+    string CreationTimeHex,
+    string ModifiedTimeHex,
     int StartSector,
     ulong Size);
 

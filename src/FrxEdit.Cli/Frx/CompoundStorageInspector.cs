@@ -34,19 +34,28 @@ internal static class CompoundStorageInspector
 
         var streamIndex = 0;
         var streams = entries
-            .Where(e => e.Type is 2 or 5)
+            .Where(e => e.Type is 1 or 2 or 5)
             .Select(e =>
             {
                 var index = streamIndex++;
-                var read = e.Type == 2
-                    ? ReadStreamData(bytes, oleOffset, sectorSize, miniSectorSize, fat, miniFat, rootRead, e, miniStreamCutoff)
-                    : rootRead;
+                var read = e.Type switch
+                {
+                    2 => ReadStreamData(bytes, oleOffset, sectorSize, miniSectorSize, fat, miniFat, rootRead, e, miniStreamCutoff),
+                    5 => rootRead,
+                    _ => new StreamRead([], [])
+                };
                 var data = read.Data;
                 var sample = Convert.ToHexString(data.AsSpan(0, Math.Min(32, data.Length)));
+                var kind = e.Type switch
+                {
+                    5 => "Root",
+                    1 => "Storage",
+                    _ => "Stream"
+                };
                 var dump = new StorageEntryDump(
                     index,
                     e.Name,
-                    e.Type == 5 ? "Root" : "Stream",
+                    kind,
                     e.StartSector,
                     e.Size,
                     e.Type == 2 && e.Size < (ulong)miniStreamCutoff,
@@ -55,7 +64,12 @@ internal static class CompoundStorageInspector
                     DetectResourceKind(sample),
                     ScanResourceHits(data),
                     data,
-                    read.FileOffsets);
+                    read.FileOffsets,
+                    e.Color,
+                    e.ClsidHex,
+                    e.StateBits,
+                    e.CreationTimeHex,
+                    e.ModifiedTimeHex);
 
                 if (pathMap.TryGetValue(e.Index, out var pathInfo))
                 {
@@ -266,12 +280,17 @@ internal static class CompoundStorageInspector
             }
 
             var name = Encoding.Unicode.GetString(entry[..Math.Min(nameLength - 2, 64)]).TrimEnd('\0');
+            var color = entry[0x43];
             var leftSiblingId = ReadInt32(entry, 0x44);
             var rightSiblingId = ReadInt32(entry, 0x48);
             var childId = ReadInt32(entry, 0x4C);
+            var clsidHex = Convert.ToHexString(entry.Slice(0x50, 16));
+            var stateBits = BinaryPrimitives.ReadUInt32LittleEndian(entry[0x60..]);
+            var creationTimeHex = Convert.ToHexString(entry.Slice(0x64, 8));
+            var modifiedTimeHex = Convert.ToHexString(entry.Slice(0x6C, 8));
             var startSector = ReadInt32(entry, 0x74);
             var size = BinaryPrimitives.ReadUInt64LittleEndian(entry[0x78..]);
-            entries.Add(new StorageDirectoryEntry(offset / 128, name, type, leftSiblingId, rightSiblingId, childId, startSector, size));
+            entries.Add(new StorageDirectoryEntry(offset / 128, name, type, color, leftSiblingId, rightSiblingId, childId, clsidHex, stateBits, creationTimeHex, modifiedTimeHex, startSector, size));
         }
 
         return entries;
@@ -563,7 +582,12 @@ internal sealed record StorageEntryDump(
     string? ResourceKind,
     IReadOnlyList<ResourceHit> ResourceHits,
     [property: JsonIgnore] byte[] Data,
-    [property: JsonIgnore] int[] FileOffsets)
+    [property: JsonIgnore] int[] FileOffsets,
+    byte DirectoryColor = 1,
+    string ClsidHex = "00000000000000000000000000000000",
+    uint StateBits = 0,
+    string CreationTimeHex = "0000000000000000",
+    string ModifiedTimeHex = "0000000000000000")
 {
     public string Path { get; init; } = string.Empty;
     public string? ParentPath { get; init; }

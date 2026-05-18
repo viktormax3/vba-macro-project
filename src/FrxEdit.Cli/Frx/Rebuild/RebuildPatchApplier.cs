@@ -25,6 +25,7 @@ internal static class RebuildPatchApplier
         if ((patch.Properties is null || patch.Properties.Count == 0) &&
             (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0) &&
             (!allowFormSitePatch || patch.Renames is null || patch.Renames.Count == 0) &&
+            (!allowFormSitePatch || patch.Move is null || patch.Move.Count == 0) &&
             (!allowFormSitePatch || patch.Add is null || patch.Add.Count == 0) &&
             (!allowFormSitePatch || patch.Remove is null || patch.Remove.Count == 0))
         {
@@ -44,8 +45,12 @@ internal static class RebuildPatchApplier
             ? patch.Renames?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        var moveByName = allowFormSitePatch
+            ? patch.Move?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
         var removeRequests = allowFormSitePatch
-            ? (patch.Remove ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            ? (patch.Remove ?? []).Concat(moveByName.Keys).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var removalPlan = allowFormSitePatch
@@ -102,9 +107,14 @@ internal static class RebuildPatchApplier
                 .ToList();
         }
 
+        if (allowFormSitePatch && moveByName.Count > 0)
+        {
+            controls.AddRange(BuildMovedControls(source.Controls, controls, moveByName, patchedByName, layoutByName));
+        }
+
         if (allowFormSitePatch && patch.Add is { Count: > 0 })
         {
-            controls.AddRange(BuildAddedControls(controls, patch.Add));
+            controls.AddRange(BuildAddedControls(source.Controls, controls, patch.Add));
         }
 
         return source with { Controls = controls, RemovedControls = removedControls, RemovedStoragePaths = removalPlan.StoragePaths };
@@ -115,6 +125,11 @@ internal static class RebuildPatchApplier
         if (patch.Add is { Count: > 0 } && !allowFormSitePatch)
         {
             throw new CliException("Rebuild object-patch does not support 'add' because new controls require FormSiteData rebuild. Use '--stream-mode full-patch'.");
+        }
+
+        if (patch.Move is { Count: > 0 } && !allowFormSitePatch)
+        {
+            throw new CliException("Rebuild object-patch does not support 'move' because moving controls requires FormSiteData rebuild. Use '--stream-mode full-patch'.");
         }
 
         if (patch.Remove is { Count: > 0 } && !allowFormSitePatch)
@@ -149,6 +164,14 @@ internal static class RebuildPatchApplier
             if (string.IsNullOrWhiteSpace(name))
             {
                 throw new CliException("Each remove entry requires a non-empty control name.");
+            }
+        }
+
+        foreach (var (name, _) in patch.Move ?? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new CliException("Each move entry requires a non-empty source control name.");
             }
         }
 
@@ -225,22 +248,54 @@ internal static class RebuildPatchApplier
                 return;
             }
 
-            if (IsStorageParentType(control.Type) && !control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase))
+            if (IsStorageParentType(control.Type))
             {
+                if (!TryGetOwnedStoragePath(control, controls, out _))
+                {
+                    throw new CliException($"Cannot remove '{control.Name}': could not determine the owned storage path to remove.");
+                }
+
+                EnsurePageRemovalLeavesSibling(control, controls);
                 return;
             }
 
-            throw new CliException($"Cannot remove '{control.Name}': this pass supports leaf object-stream controls and complete Frame/MultiPage containers only.");
+            throw new CliException($"Cannot remove '{control.Name}': this pass supports leaf object-stream controls, complete Frame/MultiPage containers, and Page containers.");
         }
 
-        if (!IsStorageParentType(control.Type) || control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase))
+        if (!IsStorageParentType(control.Type))
         {
-            throw new CliException($"Cannot remove '{control.Name}': removing this parent type is not supported yet. This pass supports complete Frame/MultiPage subtree removal.");
+            throw new CliException($"Cannot remove '{control.Name}': removing this parent type is not supported yet. This pass supports leaf controls and complete Frame/Page/MultiPage subtree removal.");
         }
 
         if (!TryGetOwnedStoragePath(control, controls, out _))
         {
             throw new CliException($"Cannot remove '{control.Name}': could not determine the owned storage path to remove.");
+        }
+
+        EnsurePageRemovalLeavesSibling(control, controls);
+    }
+
+
+    private static void EnsurePageRemovalLeavesSibling(ControlInfo control, IReadOnlyList<ControlInfo> controls)
+    {
+        if (!control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(control.Parent))
+        {
+            throw new CliException($"Cannot remove page '{control.Name}': page does not expose a MultiPage parent.");
+        }
+
+        var siblingPageCount = controls.Count(candidate =>
+            candidate.Type.Equals("Page", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.Parent, control.Parent, StringComparison.OrdinalIgnoreCase) &&
+            !candidate.Name.Equals(control.Name, StringComparison.OrdinalIgnoreCase));
+
+        if (siblingPageCount <= 0)
+        {
+            throw new CliException($"Cannot remove page '{control.Name}': removing the last page of MultiPage '{control.Parent}' is not supported yet.");
         }
     }
 
@@ -276,12 +331,80 @@ internal static class RebuildPatchApplier
         return true;
     }
 
+    private static string ResolveTargetStoragePath(string? parent, IReadOnlyList<ControlInfo> controls)
+    {
+        if (string.IsNullOrWhiteSpace(parent))
+        {
+            return "Root Entry";
+        }
+
+        var parentControl = controls.FirstOrDefault(c => c.Name.Equals(parent, StringComparison.OrdinalIgnoreCase))
+            ?? throw new CliException($"Target parent '{parent}' does not exist.");
+
+        if (!IsStorageParentType(parentControl.Type) || parentControl.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Target parent '{parent}' is type '{parentControl.Type}'. This pass supports adding/moving common controls into root, Frame, or Page containers only.");
+        }
+
+        if (!TryGetOwnedStoragePath(parentControl, controls, out var storagePath))
+        {
+            throw new CliException($"Target parent '{parent}' does not expose an owned storage path.");
+        }
+
+        return storagePath;
+    }
+
     private static string FormatStorageId(int id) => id is >= 0 and < 10 ? $"0{id}" : id.ToString(CultureInfo.InvariantCulture);
 
-    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions)
+    private static IEnumerable<ControlInfo> BuildMovedControls(
+        IReadOnlyList<ControlInfo> templateControls,
+        IReadOnlyList<ControlInfo> existingControls,
+        Dictionary<string, string?> moveByName,
+        Dictionary<string, Dictionary<string, JsonElement>> patchedByName,
+        Dictionary<string, LayoutPatch> layoutByName)
+    {
+        var additions = new List<AddControlPatch>();
+        foreach (var (controlName, newParent) in moveByName)
+        {
+            var template = templateControls.FirstOrDefault(c => c.Name.Equals(controlName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new CliException($"Cannot move '{controlName}': control does not exist.");
+
+            if (templateControls.Any(candidate => string.Equals(candidate.Parent, template.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new CliException($"Cannot move '{controlName}': pass 36 only supports moving leaf object-stream controls. Move/remove containers separately.");
+            }
+
+            var add = new AddControlPatch
+            {
+                FromTemplate = controlName,
+                Name = controlName,
+                // In a move map, null/empty target means move to the root container.
+                Parent = string.IsNullOrWhiteSpace(newParent) ? string.Empty : newParent.Trim(),
+                Properties = patchedByName.TryGetValue(controlName, out var requested) ? requested : null
+            };
+
+            if (layoutByName.TryGetValue(controlName, out var layout))
+            {
+                add.Left = layout.Left;
+                add.Top = layout.Top;
+                add.RawWidth = layout.RawWidth ?? layout.Width;
+                add.RawHeight = layout.RawHeight ?? layout.Height;
+                add.LeftPt = layout.LeftPt;
+                add.TopPt = layout.TopPt;
+                add.WidthPt = layout.WidthPt;
+                add.HeightPt = layout.HeightPt;
+            }
+
+            additions.Add(add);
+        }
+
+        return BuildAddedControls(templateControls, existingControls, additions);
+    }
+
+    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> templateControls, IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions)
     {
         var names = existingControls.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var maxId = existingControls
+        var maxId = templateControls.Concat(existingControls)
             .Select(c => c.Properties is not null && TryGetInt(c.Properties, "siteId", out var id) ? id : 0)
             .DefaultIfEmpty(0)
             .Max();
@@ -295,7 +418,7 @@ internal static class RebuildPatchApplier
                 throw new CliException($"Add target '{name}' would duplicate an existing control.");
             }
 
-            var template = existingControls.FirstOrDefault(c => c.Name.Equals(add.FromTemplate, StringComparison.OrdinalIgnoreCase))
+            var template = templateControls.FirstOrDefault(c => c.Name.Equals(add.FromTemplate, StringComparison.OrdinalIgnoreCase))
                 ?? throw new CliException($"Add template '{add.FromTemplate}' does not exist.");
 
             if (!string.IsNullOrWhiteSpace(add.Type) && !template.Type.Equals(add.Type, StringComparison.OrdinalIgnoreCase))
@@ -304,20 +427,34 @@ internal static class RebuildPatchApplier
             }
 
             var parent = add.Parent is null ? template.Parent : (string.IsNullOrWhiteSpace(add.Parent) ? null : add.Parent.Trim());
-            if (!string.Equals(parent, template.Parent, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new CliException($"Add target '{name}' cannot change parent yet. Pass 32 only supports cloning into the same parent/storage as template '{template.Name}'.");
-            }
 
             if (template.Properties is null)
             {
                 throw new CliException($"Add template '{template.Name}' has no structured metadata.");
             }
 
+            var targetStoragePath = ResolveTargetStoragePath(parent, existingControls);
+            var targetStreamPath = $"{targetStoragePath}/f";
+            if (!existingControls.Any(c => c.Properties is not null && TryGetString(c.Properties, "streamPath", out var candidateStreamPath) && candidateStreamPath.Equals(targetStreamPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new CliException($"Add target '{name}' cannot target '{parent ?? "<root>"}': this pass requires at least one existing child in the target FormSiteData stream so CountOfSites/CountOfBytes/ClassTable metadata can be rebuilt safely.");
+            }
+
+            if (!TryGetString(template.Properties, "storagePath", out var templateStoragePath) || string.IsNullOrWhiteSpace(templateStoragePath) ||
+                !TryGetString(template.Properties, "streamPath", out var templateStreamPath) || string.IsNullOrWhiteSpace(templateStreamPath))
+            {
+                throw new CliException($"Add template '{template.Name}' is missing storagePath/streamPath metadata.");
+            }
+
             var props = new Dictionary<string, object?>(template.Properties, StringComparer.OrdinalIgnoreCase);
             maxId++;
             props["isAddedControl"] = true;
             props["templateControlName"] = template.Name;
+            props["templateStoragePath"] = templateStoragePath;
+            props["templateStreamPath"] = templateStreamPath;
+            props["templateObjectStreamPath"] = $"{templateStoragePath}/o";
+            props["storagePath"] = targetStoragePath;
+            props["streamPath"] = targetStreamPath;
             props["name"] = name;
             props["nameRaw"] = name;
             props["siteName"] = name;

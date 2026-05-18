@@ -8,6 +8,10 @@ internal static class ObjectStreamRoundTripRewriter
         var slicesByObjectStreamPath = BuildSlicesByObjectStreamPath(layout);
         var additionsByObjectStreamPath = BuildAdditionsByObjectStreamPath(layout);
         var removalsByObjectStreamPath = BuildRemovedByObjectStreamPath(layout);
+        var streamsByPath = dump.Streams
+            .Where(stream => !string.IsNullOrWhiteSpace(stream.Path))
+            .GroupBy(stream => stream.Path!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         if (slicesByObjectStreamPath.Count == 0 && additionsByObjectStreamPath.Count == 0 && removalsByObjectStreamPath.Count == 0)
         {
             if (mode != ObjectStreamRewriteMode.RoundTrip && LayoutHasObjectPayloads(layout))
@@ -39,7 +43,7 @@ internal static class ObjectStreamRoundTripRewriter
                 continue;
             }
 
-            var rewritten = RewriteObjectStream(stream.Path, stream.Data, slices ?? [], additions ?? [], removals ?? [], mode, sizeUpdates);
+            var rewritten = RewriteObjectStream(stream.Path, stream.Data, streamsByPath, slices ?? [], additions ?? [], removals ?? [], mode, sizeUpdates);
             rewrittenObjectStreams[stream.Path] = rewritten;
         }
 
@@ -91,7 +95,7 @@ internal static class ObjectStreamRoundTripRewriter
                 if (mode == ObjectStreamRewriteMode.FormAndObjectPatch && (hasTargetControls || hasRemovedControls))
                 {
                     updatesByFormStreamPath.TryGetValue(stream.Path, out var updates);
-                    patched = RewriteFormSiteData(stream with { Data = patched }, controls ?? [], updates ?? [], removedControls ?? []);
+                    patched = RewriteFormSiteData(stream with { Data = patched }, streamsByPath, controls ?? [], updates ?? [], removedControls ?? []);
                     changed = true;
                 }
                 else if (updatesByFormStreamPath.TryGetValue(stream.Path, out var updates))
@@ -104,6 +108,15 @@ internal static class ObjectStreamRoundTripRewriter
                 {
                     return WithNewData(stream, patched);
                 }
+            }
+
+            if (mode == ObjectStreamRewriteMode.FormAndObjectPatch &&
+                !string.IsNullOrWhiteSpace(stream.Path) &&
+                stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+                stream.Name.Equals("x", StringComparison.OrdinalIgnoreCase) &&
+                TryRewriteMultiPageXStream(stream, layout, out var rewrittenXStream))
+            {
+                return WithNewData(stream, rewrittenXStream);
             }
 
             return stream;
@@ -126,6 +139,203 @@ internal static class ObjectStreamRoundTripRewriter
             {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+
+    private static bool TryRewriteMultiPageXStream(StorageEntryDump xStream, LayoutInspection layout, out byte[] rewritten)
+    {
+        rewritten = [];
+        if (string.IsNullOrWhiteSpace(xStream.Path))
+        {
+            return false;
+        }
+
+        var multiPage = layout.Controls.FirstOrDefault(control =>
+            control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase) &&
+            control.Properties is not null &&
+            TryGetString(control.Properties, "multiPageXStreamPath", out var path) &&
+            path.Equals(xStream.Path, StringComparison.OrdinalIgnoreCase));
+
+        if (multiPage?.Properties is null)
+        {
+            return false;
+        }
+
+        if (!TryGetInt(multiPage.Properties, "multiPagePageCount", out var originalPageCount))
+        {
+            return false;
+        }
+
+        var pages = layout.Controls
+            .Where(control => control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(control.Parent, multiPage.Name, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(control => control.Properties is not null && TryGetInt(control.Properties, "multiPagePageIndex", out var index) ? index : int.MaxValue)
+            .ThenBy(control => control.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (pages.Count == originalPageCount)
+        {
+            // No page add/remove happened for this MultiPage. Keep the stream byte-for-byte as-is.
+            return false;
+        }
+
+        if (pages.Count <= 0)
+        {
+            throw new CliException($"Cannot rebuild MultiPage x stream '{xStream.Path}': a MultiPage must keep at least one page.");
+        }
+
+        var data = xStream.Data;
+        var ignoredPageProperties = TryGetFirstPagePropertiesSlice(multiPage, pages, data);
+        var multiPageProperties = GetMultiPagePropertiesSlice(multiPage, data);
+        using var output = new MemoryStream(data.Length);
+        output.Write(data, ignoredPageProperties.Start, ignoredPageProperties.Length);
+
+        foreach (var page in pages)
+        {
+            var pageSlice = GetPagePropertiesSlice(page, data);
+            output.Write(data, pageSlice.Start, pageSlice.Length);
+        }
+
+        var multiPageBytes = data.AsSpan(multiPageProperties.Start, multiPageProperties.Length).ToArray();
+        if (TryGetInt(multiPage.Properties, "multiPagePageCountLocalOffset", out var pageCountLocalOffset))
+        {
+            var relative = pageCountLocalOffset - multiPageProperties.Start;
+            if (relative < 0 || relative + 4 > multiPageBytes.Length)
+            {
+                throw new CliException($"Cannot rebuild MultiPage x stream '{xStream.Path}': page count offset is outside MultiPageProperties.");
+            }
+
+            BinaryPrimitives.WriteInt32LittleEndian(multiPageBytes.AsSpan(relative, 4), pages.Count);
+        }
+        else
+        {
+            throw new CliException($"Cannot rebuild MultiPage x stream '{xStream.Path}': missing multiPagePageCountLocalOffset metadata.");
+        }
+
+        output.Write(multiPageBytes, 0, multiPageBytes.Length);
+
+        foreach (var page in pages)
+        {
+            var pageId = GetPageId(page);
+            Span<byte> buffer = stackalloc byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(buffer, pageId);
+            output.Write(buffer);
+        }
+
+        rewritten = output.ToArray();
+        return true;
+    }
+
+    private static (int Start, int Length) TryGetFirstPagePropertiesSlice(ControlInfo multiPage, IReadOnlyList<ControlInfo> pages, byte[] xStream)
+    {
+        if (pages.Count > 0 && pages[0].Properties is not null && TryGetInt(pages[0].Properties, "pagePropertiesLocalOffset", out var firstPageOffset))
+        {
+            if (firstPageOffset <= 0 || firstPageOffset > xStream.Length)
+            {
+                throw new CliException($"Cannot rebuild MultiPage x stream for '{multiPage.Name}': invalid first page properties offset.");
+            }
+
+            return (0, firstPageOffset);
+        }
+
+        if (multiPage.Properties is not null && TryGetObjectList(multiPage.Properties, "pageProperties", out var pageProperties) && pageProperties.Count > 0)
+        {
+            var first = pageProperties[0];
+            if (TryGetInt(first, "localOffset", out var offset) && TryGetInt(first, "cbPage", out var cbPage))
+            {
+                return CheckedSlice(offset, checked(4 + cbPage), xStream.Length, $"{multiPage.Name}.PageProperties[0]");
+            }
+        }
+
+        throw new CliException($"Cannot rebuild MultiPage x stream for '{multiPage.Name}': missing ignored PageProperties[0] metadata.");
+    }
+
+    private static (int Start, int Length) GetPagePropertiesSlice(ControlInfo page, byte[] xStream)
+    {
+        if (page.Properties is null || !TryGetInt(page.Properties, "pagePropertiesLocalOffset", out var offset) || !TryGetInt(page.Properties, "pagePropertiesCbPage", out var cbPage))
+        {
+            throw new CliException($"Cannot rebuild MultiPage x stream: page '{page.Name}' is missing PageProperties metadata.");
+        }
+
+        return CheckedSlice(offset, checked(4 + cbPage), xStream.Length, $"{page.Name}.PageProperties");
+    }
+
+    private static (int Start, int Length) GetMultiPagePropertiesSlice(ControlInfo multiPage, byte[] xStream)
+    {
+        if (multiPage.Properties is null || !TryGetInt(multiPage.Properties, "xStreamLocalOffset", out var offset) || !TryGetInt(multiPage.Properties, "cbMultiPageControlProperties", out var cb))
+        {
+            throw new CliException($"Cannot rebuild MultiPage x stream: MultiPage '{multiPage.Name}' is missing MultiPageProperties metadata.");
+        }
+
+        return CheckedSlice(offset, checked(4 + cb), xStream.Length, $"{multiPage.Name}.MultiPageProperties");
+    }
+
+    private static (int Start, int Length) CheckedSlice(int offset, int length, int totalLength, string description)
+    {
+        if (offset < 0 || length < 0 || offset + length > totalLength)
+        {
+            throw new CliException($"Cannot rebuild {description}: slice {offset}+{length} exceeds x stream length {totalLength}.");
+        }
+
+        return (offset, length);
+    }
+
+    private static uint GetPageId(ControlInfo page)
+    {
+        if (page.Properties is null)
+        {
+            throw new CliException($"Cannot rebuild MultiPage x stream: page '{page.Name}' has no properties.");
+        }
+
+        if (TryGetInt(page.Properties, "multiPagePageId", out var pageId) || TryGetInt(page.Properties, "siteId", out pageId) || TryGetInt(page.Properties, "id", out pageId))
+        {
+            if (pageId < 0)
+            {
+                throw new CliException($"Cannot rebuild MultiPage x stream: page '{page.Name}' has negative page ID {pageId}.");
+            }
+
+            return (uint)pageId;
+        }
+
+        throw new CliException($"Cannot rebuild MultiPage x stream: page '{page.Name}' is missing page ID metadata.");
+    }
+
+    private static bool TryGetObjectList(Dictionary<string, object?> properties, string name, out List<Dictionary<string, object?>> values)
+    {
+        values = [];
+        if (!properties.TryGetValue(name, out var raw) || raw is null)
+        {
+            return false;
+        }
+
+        if (raw is IEnumerable<Dictionary<string, object?>> dictionaries)
+        {
+            values = dictionaries.ToList();
+            return values.Count > 0;
+        }
+
+        if (raw is JsonElement { ValueKind: JsonValueKind.Array } array)
+        {
+            foreach (var element in array.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var dictionary = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var property in element.EnumerateObject())
+                {
+                    dictionary[property.Name] = property.Value;
+                }
+
+                values.Add(dictionary);
+            }
+
+            return values.Count > 0;
         }
 
         return false;
@@ -179,6 +389,7 @@ internal static class ObjectStreamRoundTripRewriter
 
     private static byte[] RewriteFormSiteData(
         StorageEntryDump formStream,
+        IReadOnlyDictionary<string, StorageEntryDump> streamsByPath,
         IReadOnlyList<ControlInfo> controls,
         IReadOnlyList<ObjectStreamSizeUpdate> sizeUpdates,
         IReadOnlyList<ControlInfo> removedControls)
@@ -209,8 +420,8 @@ internal static class ObjectStreamRoundTripRewriter
         var countDelta = additions.Count - removals.Count;
 
         var allOriginalSlices = slices
-            .Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, IsRemoval: false))
-            .Concat(removals.Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, IsRemoval: true)))
+            .Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: false))
+            .Concat(removals.Select(slice => new FormSiteRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: true)))
             .OrderBy(slice => slice.Start)
             .ToList();
 
@@ -262,7 +473,9 @@ internal static class ObjectStreamRoundTripRewriter
             }
 
             objectSizeUpdatesByControl.TryGetValue(slice.Control.Name, out var newObjectSize);
-            var sitePayload = SerializeFormSite(slice.Control, formStream, original.AsSpan(slice.Start, slice.Size), slice.Start, newObjectSize);
+            var sourceFormStream = ResolveSourceStream(streamsByPath, slice.SourceStreamPath, formStream.Path, $"site slice for '{slice.Control.Name}'");
+            var sourceSiteData = sourceFormStream.Data.AsSpan(slice.Start, slice.Size);
+            var sitePayload = SerializeFormSite(slice.Control, sourceFormStream, sourceSiteData, slice.Start, newObjectSize);
             totalDelta += sitePayload.Length - slice.Size;
             output.Write(sitePayload, 0, sitePayload.Length);
             cursor = slice.Start + slice.Size;
@@ -270,13 +483,14 @@ internal static class ObjectStreamRoundTripRewriter
 
         foreach (var addition in additions)
         {
-            if (addition.Start < 0 || addition.Start + addition.Size > original.Length)
+            var sourceFormStream = ResolveSourceStream(streamsByPath, addition.SourceStreamPath, formStream.Path, $"added site template for '{addition.Control.Name}'");
+            if (addition.Start < 0 || addition.Start + addition.Size > sourceFormStream.Data.Length)
             {
-                throw new CliException($"Cannot add '{addition.Control.Name}' to form stream '{formStream.Path}': template site slice exceeds stream length.");
+                throw new CliException($"Cannot add '{addition.Control.Name}' to form stream '{formStream.Path}': template site slice exceeds source stream '{sourceFormStream.Path}' length.");
             }
 
             objectSizeUpdatesByControl.TryGetValue(addition.Control.Name, out var newObjectSize);
-            var sitePayload = SerializeFormSite(addition.Control, formStream, original.AsSpan(addition.Start, addition.Size), addition.Start, newObjectSize);
+            var sitePayload = SerializeFormSite(addition.Control, sourceFormStream, sourceFormStream.Data.AsSpan(addition.Start, addition.Size), addition.Start, newObjectSize);
             totalDelta += sitePayload.Length;
             output.Write(sitePayload, 0, sitePayload.Length);
         }
@@ -324,7 +538,12 @@ internal static class ObjectStreamRoundTripRewriter
                 continue;
             }
 
-            result.Add(new FormSiteSlice(control, start, checked(cbSite + 4)));
+            if (!TryGetString(props, "streamPath", out var sourceStreamPath) || string.IsNullOrWhiteSpace(sourceStreamPath))
+            {
+                sourceStreamPath = formStream.Path;
+            }
+
+            result.Add(new FormSiteSlice(control, start, checked(cbSite + 4), sourceStreamPath));
         }
 
         result.Sort((a, b) => a.Start.CompareTo(b.Start));
@@ -352,7 +571,12 @@ internal static class ObjectStreamRoundTripRewriter
                 throw new CliException($"Cannot remove '{control.Name}' from form stream '{formStream.Path}': removed control is not an OleSiteConcrete site.");
             }
 
-            result.Add(new FormSiteSlice(control, start, checked(cbSite + 4)));
+            if (!TryGetString(props, "streamPath", out var sourceStreamPath) || string.IsNullOrWhiteSpace(sourceStreamPath))
+            {
+                sourceStreamPath = formStream.Path;
+            }
+
+            result.Add(new FormSiteSlice(control, start, checked(cbSite + 4), sourceStreamPath));
         }
 
         result.Sort((a, b) => a.Start.CompareTo(b.Start));
@@ -380,7 +604,15 @@ internal static class ObjectStreamRoundTripRewriter
                 throw new CliException($"Cannot add '{control.Name}' to form stream '{formStream.Path}': template is not an OleSiteConcrete site.");
             }
 
-            result.Add(new FormSiteSlice(control, templateStart, checked(cbSite + 4)));
+            if (!TryGetString(props, "templateStreamPath", out var sourceStreamPath) || string.IsNullOrWhiteSpace(sourceStreamPath))
+            {
+                if (!TryGetString(props, "streamPath", out sourceStreamPath) || string.IsNullOrWhiteSpace(sourceStreamPath))
+                {
+                    sourceStreamPath = formStream.Path;
+                }
+            }
+
+            result.Add(new FormSiteSlice(control, templateStart, checked(cbSite + 4), sourceStreamPath));
         }
 
         return result;
@@ -442,7 +674,7 @@ internal static class ObjectStreamRoundTripRewriter
 
     private static byte[] SerializeFormSite(
         ControlInfo control,
-        StorageEntryDump formStream,
+        StorageEntryDump sourceFormStream,
         ReadOnlySpan<byte> originalSite,
         int siteStartLocalOffset,
         int newObjectStreamSize)
@@ -458,27 +690,27 @@ internal static class ObjectStreamRoundTripRewriter
         // reverse order, so shifted tail bytes carry these patched values to their final positions.
         if (control.Left is int left && control.LeftOffset is int leftFileOffset)
         {
-            WriteInt32ByFileOffsetToSlice(formStream, site, siteStartLocalOffset, leftFileOffset, left, $"{control.Name}.left");
+            WriteInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, leftFileOffset, left, $"{control.Name}.left");
         }
 
         if (control.Top is int top && control.TopOffset is int topFileOffset)
         {
-            WriteInt32ByFileOffsetToSlice(formStream, site, siteStartLocalOffset, topFileOffset, top, $"{control.Name}.top");
+            WriteInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, topFileOffset, top, $"{control.Name}.top");
         }
 
         if (TryGetInt(props, "tabIndex", out var tabIndex) && TryGetInt(props, "tabIndexOffset", out var tabIndexFileOffset))
         {
-            WriteUInt16ByFileOffsetToSlice(formStream, site, siteStartLocalOffset, tabIndexFileOffset, tabIndex, $"{control.Name}.tabIndex");
+            WriteUInt16ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, tabIndexFileOffset, tabIndex, $"{control.Name}.tabIndex");
         }
 
         if (TryGetInt(props, "siteId", out var siteId) && TryGetInt(props, "siteIdOffset", out var siteIdFileOffset))
         {
-            WriteUInt32ByFileOffsetToSlice(formStream, site, siteStartLocalOffset, siteIdFileOffset, siteId, $"{control.Name}.ID");
+            WriteUInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, siteIdFileOffset, siteId, $"{control.Name}.ID");
         }
 
         if (newObjectStreamSize > 0 && TryGetInt(props, "siteObjectStreamSizeOffset", out var objectSizeFileOffset))
         {
-            WriteUInt32ByFileOffsetToSlice(formStream, site, siteStartLocalOffset, objectSizeFileOffset, newObjectStreamSize, $"{control.Name}.ObjectStreamSize");
+            WriteUInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, objectSizeFileOffset, newObjectStreamSize, $"{control.Name}.ObjectStreamSize");
         }
 
         var segments = BuildFormSiteStringSegments(control, props, siteStartLocalOffset);
@@ -888,7 +1120,7 @@ internal static class ObjectStreamRoundTripRewriter
                 result[objectStreamPath] = slices;
             }
 
-            slices.Add(new ObjectStreamSlice(control, start, size));
+            slices.Add(new ObjectStreamSlice(control, start, size, objectStreamPath));
         }
 
         foreach (var pair in result)
@@ -924,7 +1156,12 @@ internal static class ObjectStreamRoundTripRewriter
                 result[objectStreamPath] = additions;
             }
 
-            additions.Add(new ObjectStreamSlice(control, templateStart, templateSize));
+            if (!TryGetString(props, "templateObjectStreamPath", out var sourceObjectStreamPath) || string.IsNullOrWhiteSpace(sourceObjectStreamPath))
+            {
+                sourceObjectStreamPath = objectStreamPath;
+            }
+
+            additions.Add(new ObjectStreamSlice(control, templateStart, templateSize, sourceObjectStreamPath));
         }
 
         return result;
@@ -960,7 +1197,7 @@ internal static class ObjectStreamRoundTripRewriter
                 result[objectStreamPath] = slices;
             }
 
-            slices.Add(new ObjectStreamSlice(control, start, size));
+            slices.Add(new ObjectStreamSlice(control, start, size, objectStreamPath));
         }
 
         foreach (var pair in result)
@@ -974,6 +1211,7 @@ internal static class ObjectStreamRoundTripRewriter
     private static byte[] RewriteObjectStream(
         string path,
         byte[] original,
+        IReadOnlyDictionary<string, StorageEntryDump> streamsByPath,
         IReadOnlyList<ObjectStreamSlice> slices,
         IReadOnlyList<ObjectStreamSlice> additions,
         IReadOnlyList<ObjectStreamSlice> removals,
@@ -983,8 +1221,8 @@ internal static class ObjectStreamRoundTripRewriter
         using var output = new MemoryStream(original.Length);
         var cursor = 0;
         var originalSegments = slices
-            .Select(slice => new ObjectStreamRewriteSlice(slice.Control, slice.Start, slice.Size, IsRemoval: false))
-            .Concat(removals.Select(slice => new ObjectStreamRewriteSlice(slice.Control, slice.Start, slice.Size, IsRemoval: true)))
+            .Select(slice => new ObjectStreamRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: false))
+            .Concat(removals.Select(slice => new ObjectStreamRewriteSlice(slice.Control, slice.Start, slice.Size, slice.SourceStreamPath, IsRemoval: true)))
             .OrderBy(slice => slice.Start)
             .ToList();
 
@@ -1011,7 +1249,13 @@ internal static class ObjectStreamRoundTripRewriter
                 continue;
             }
 
-            var originalPayload = original.AsSpan(slice.Start, slice.Size);
+            var sourceObjectStream = ResolveSourceStream(streamsByPath, slice.SourceStreamPath, path, $"object slice for '{slice.Control.Name}'");
+            if (slice.Start < 0 || slice.Start + slice.Size > sourceObjectStream.Data.Length)
+            {
+                throw new CliException($"Cannot rebuild object stream '{path}': slice for '{slice.Control.Name}' exceeds source stream '{sourceObjectStream.Path}' length.");
+            }
+
+            var originalPayload = sourceObjectStream.Data.AsSpan(slice.Start, slice.Size);
             var payload = mode switch
             {
                 ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(slice.Control, originalPayload),
@@ -1041,12 +1285,13 @@ internal static class ObjectStreamRoundTripRewriter
 
         foreach (var addition in additions)
         {
-            if (addition.Start < 0 || addition.Start + addition.Size > original.Length)
+            var sourceObjectStream = ResolveSourceStream(streamsByPath, addition.SourceStreamPath, path, $"added object template for '{addition.Control.Name}'");
+            if (addition.Start < 0 || addition.Start + addition.Size > sourceObjectStream.Data.Length)
             {
-                throw new CliException($"Cannot add '{addition.Control.Name}' to object stream '{path}': template slice exceeds stream length.");
+                throw new CliException($"Cannot add '{addition.Control.Name}' to object stream '{path}': template slice exceeds source stream '{sourceObjectStream.Path}' length.");
             }
 
-            var originalPayload = original.AsSpan(addition.Start, addition.Size);
+            var originalPayload = sourceObjectStream.Data.AsSpan(addition.Start, addition.Size);
             var payload = mode switch
             {
                 ObjectStreamRewriteMode.ActiveSerializeFixed => ObjectPayloadSerializer.SerializeFixedLength(addition.Control, originalPayload),
@@ -1060,6 +1305,17 @@ internal static class ObjectStreamRoundTripRewriter
         }
 
         return output.ToArray();
+    }
+
+    private static StorageEntryDump ResolveSourceStream(IReadOnlyDictionary<string, StorageEntryDump> streamsByPath, string? sourcePath, string fallbackPath, string context)
+    {
+        var path = string.IsNullOrWhiteSpace(sourcePath) ? fallbackPath : sourcePath;
+        if (streamsByPath.TryGetValue(path, out var stream))
+        {
+            return stream;
+        }
+
+        throw new CliException($"Cannot resolve source stream '{path}' for {context}.");
     }
 
     private static void AddSizeUpdate(ControlInfo control, int newSize, List<ObjectStreamSizeUpdate> sizeUpdates)
@@ -1233,11 +1489,11 @@ internal static class ObjectStreamRoundTripRewriter
         int PaddedByteCount,
         bool Compressed);
 
-    private sealed record FormSiteSlice(ControlInfo Control, int Start, int Size);
-    private sealed record FormSiteRewriteSlice(ControlInfo Control, int Start, int Size, bool IsRemoval);
+    private sealed record FormSiteSlice(ControlInfo Control, int Start, int Size, string SourceStreamPath);
+    private sealed record FormSiteRewriteSlice(ControlInfo Control, int Start, int Size, string SourceStreamPath, bool IsRemoval);
 
-    private sealed record ObjectStreamSlice(ControlInfo Control, int Start, int Size);
-    private sealed record ObjectStreamRewriteSlice(ControlInfo Control, int Start, int Size, bool IsRemoval);
+    private sealed record ObjectStreamSlice(ControlInfo Control, int Start, int Size, string SourceStreamPath);
+    private sealed record ObjectStreamRewriteSlice(ControlInfo Control, int Start, int Size, string SourceStreamPath, bool IsRemoval);
     private sealed record ObjectStreamSizeUpdate(string ControlName, string FormStreamPath, int SiteObjectStreamSizeFileOffset, int NewSize);
 }
 

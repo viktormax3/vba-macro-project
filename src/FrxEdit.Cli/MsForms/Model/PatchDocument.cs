@@ -4,6 +4,7 @@ internal sealed class PatchDocument
     public Dictionary<string, LayoutPatch>? Layout { get; set; }
     public Dictionary<string, Dictionary<string, JsonElement>>? Properties { get; set; }
     public List<string>? Remove { get; set; }
+    public Dictionary<string, string?>? Move { get; set; }
     public List<AddControlPatch>? Add { get; set; }
 }
 

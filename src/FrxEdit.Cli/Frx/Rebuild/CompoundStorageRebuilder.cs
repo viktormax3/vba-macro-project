@@ -13,6 +13,16 @@ internal static class CompoundStorageRebuilder
     public static byte[] BuildFromDump(CompoundStorageDump dump)
     {
         var builder = new Builder();
+
+        foreach (var entry in dump.Streams.Where(s => !string.IsNullOrWhiteSpace(s.Path)))
+        {
+            if (entry.Kind.Equals("Root", StringComparison.OrdinalIgnoreCase) ||
+                entry.Kind.Equals("Storage", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.ApplyMetadata(entry.Path, entry);
+            }
+        }
+
         foreach (var stream in dump.Streams.Where(s => s.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase)))
         {
             if (string.IsNullOrWhiteSpace(stream.Path))
@@ -20,7 +30,7 @@ internal static class CompoundStorageRebuilder
                 continue;
             }
 
-            builder.AddStream(stream.Path, stream.Data);
+            builder.AddStream(stream.Path, stream.Data, stream);
         }
 
         return builder.Build();
@@ -30,7 +40,13 @@ internal static class CompoundStorageRebuilder
     {
         private readonly Node _root = new("Root Entry", NodeType.Root);
 
-        public void AddStream(string fullPath, byte[] data)
+        public void ApplyMetadata(string fullPath, StorageEntryDump metadata)
+        {
+            var node = EnsureNode(fullPath, metadata.Kind.Equals("Root", StringComparison.OrdinalIgnoreCase) ? NodeType.Root : NodeType.Storage);
+            node.ApplyMetadata(metadata);
+        }
+
+        public void AddStream(string fullPath, byte[] data, StorageEntryDump? metadata = null)
         {
             var parts = fullPath.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (parts.Length < 2 || !parts[0].Equals("Root Entry", StringComparison.OrdinalIgnoreCase))
@@ -44,7 +60,29 @@ internal static class CompoundStorageRebuilder
                 current = current.GetOrAddStorage(parts[i]);
             }
 
-            current.AddOrReplaceStream(parts[^1], data);
+            current.AddOrReplaceStream(parts[^1], data, metadata);
+        }
+
+        private Node EnsureNode(string fullPath, NodeType nodeType)
+        {
+            var parts = fullPath.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length == 0 || !parts[0].Equals("Root Entry", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new CliException($"Cannot apply CFB metadata to unsupported path '{fullPath}'.");
+            }
+
+            var current = _root;
+            if (nodeType == NodeType.Root && parts.Length == 1)
+            {
+                return current;
+            }
+
+            for (var i = 1; i < parts.Length; i++)
+            {
+                current = current.GetOrAddStorage(parts[i]);
+            }
+
+            return current;
         }
 
         public byte[] Build()
@@ -184,7 +222,7 @@ internal static class CompoundStorageRebuilder
             {
                 node.DirectoryId = entries.Count;
                 entries.Add(new DirectoryEntryBuild(node));
-                foreach (var child in node.Children.Values.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase))
+                foreach (var child in node.Children.Values.OrderBy(c => c.Name, CfbNameComparer.Instance))
                 {
                     Visit(child);
                 }
@@ -197,17 +235,29 @@ internal static class CompoundStorageRebuilder
         {
             void Visit(Node node)
             {
-                var children = node.Children.Values.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
-                node.ChildId = children.Count == 0 ? -1 : children[0].DirectoryId;
-                for (var i = 0; i < children.Count; i++)
+                var children = node.Children.Values.OrderBy(c => c.Name, CfbNameComparer.Instance).ToList();
+                node.ChildId = AssignBalancedSiblingTree(children, 0, children.Count);
+                foreach (var child in children)
                 {
-                    children[i].LeftSiblingId = -1;
-                    children[i].RightSiblingId = i + 1 < children.Count ? children[i + 1].DirectoryId : -1;
-                    Visit(children[i]);
+                    Visit(child);
                 }
             }
 
             Visit(root);
+        }
+
+        private static int AssignBalancedSiblingTree(IReadOnlyList<Node> children, int start, int count)
+        {
+            if (count <= 0)
+            {
+                return -1;
+            }
+
+            var mid = start + count / 2;
+            var node = children[mid];
+            node.LeftSiblingId = AssignBalancedSiblingTree(children, start, mid - start);
+            node.RightSiblingId = AssignBalancedSiblingTree(children, mid + 1, start + count - mid - 1);
+            return node.DirectoryId;
         }
 
         private static byte[] BuildDirectoryStream(IReadOnlyList<DirectoryEntryBuild> entries)
@@ -240,12 +290,31 @@ internal static class CompoundStorageRebuilder
                 NodeType.Stream => 2,
                 _ => 0
             };
-            entry[0x43] = 1; // black
+            entry[0x43] = node.DirectoryColor;
             BinaryPrimitives.WriteInt32LittleEndian(entry[0x44..], node.LeftSiblingId);
             BinaryPrimitives.WriteInt32LittleEndian(entry[0x48..], node.RightSiblingId);
             BinaryPrimitives.WriteInt32LittleEndian(entry[0x4C..], node.ChildId);
-            BinaryPrimitives.WriteInt32LittleEndian(entry[0x74..], build.StartSector);
+            WriteHexBytes(entry[0x50..0x60], node.ClsidHex);
+            BinaryPrimitives.WriteUInt32LittleEndian(entry[0x60..], node.StateBits);
+            WriteHexBytes(entry[0x64..0x6C], node.CreationTimeHex);
+            WriteHexBytes(entry[0x6C..0x74], node.ModifiedTimeHex);
+            var startSector = node.Type == NodeType.Storage ? 0 : build.StartSector;
+            BinaryPrimitives.WriteInt32LittleEndian(entry[0x74..], startSector);
             BinaryPrimitives.WriteUInt64LittleEndian(entry[0x78..], build.Size);
+        }
+
+        private static void WriteHexBytes(Span<byte> target, string? hex)
+        {
+            target.Clear();
+            if (string.IsNullOrWhiteSpace(hex) || hex.Length != target.Length * 2)
+            {
+                return;
+            }
+
+            for (var i = 0; i < target.Length; i++)
+            {
+                target[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+            }
         }
 
         private static byte[] BuildInt32Stream(IReadOnlyList<int> values)
@@ -347,12 +416,26 @@ internal static class CompoundStorageRebuilder
     {
         public string Name { get; } = name;
         public NodeType Type { get; } = type;
-        public SortedDictionary<string, Node> Children { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public SortedDictionary<string, Node> Children { get; } = new(CfbNameComparer.Instance);
         public byte[]? Data { get; set; }
         public int DirectoryId { get; set; } = -1;
         public int LeftSiblingId { get; set; } = -1;
         public int RightSiblingId { get; set; } = -1;
         public int ChildId { get; set; } = -1;
+        public byte DirectoryColor { get; set; } = 1;
+        public string ClsidHex { get; set; } = type == NodeType.Root ? "F0692AC6DC16CE119E9800AA00574A4F" : "00000000000000000000000000000000";
+        public uint StateBits { get; set; }
+        public string CreationTimeHex { get; set; } = "0000000000000000";
+        public string ModifiedTimeHex { get; set; } = "0000000000000000";
+
+        public void ApplyMetadata(StorageEntryDump metadata)
+        {
+            DirectoryColor = metadata.DirectoryColor;
+            ClsidHex = metadata.ClsidHex;
+            StateBits = metadata.StateBits;
+            CreationTimeHex = metadata.CreationTimeHex;
+            ModifiedTimeHex = metadata.ModifiedTimeHex;
+        }
 
         public Node GetOrAddStorage(string name)
         {
@@ -371,14 +454,38 @@ internal static class CompoundStorageRebuilder
             return storage;
         }
 
-        public void AddOrReplaceStream(string name, byte[] data)
+        public void AddOrReplaceStream(string name, byte[] data, StorageEntryDump? metadata = null)
         {
             if (Children.TryGetValue(name, out var existing) && existing.Type != NodeType.Stream)
             {
                 throw new CliException($"CFB path collision: '{name}' already exists as a storage.");
             }
 
-            Children[name] = new Node(name, NodeType.Stream) { Data = data.ToArray() };
+            var stream = new Node(name, NodeType.Stream) { Data = data.ToArray() };
+            if (metadata is not null)
+            {
+                stream.ApplyMetadata(metadata);
+            }
+
+            Children[name] = stream;
+        }
+    }
+
+    private sealed class CfbNameComparer : IComparer<string>
+    {
+        public static readonly CfbNameComparer Instance = new();
+
+        public int Compare(string? x, string? y)
+        {
+            x ??= string.Empty;
+            y ??= string.Empty;
+            var lengthCompare = x.Length.CompareTo(y.Length);
+            if (lengthCompare != 0)
+            {
+                return lengthCompare;
+            }
+
+            return string.Compare(x, y, StringComparison.OrdinalIgnoreCase);
         }
     }
 
