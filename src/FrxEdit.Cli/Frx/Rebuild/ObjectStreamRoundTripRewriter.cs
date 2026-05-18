@@ -119,6 +119,15 @@ internal static class ObjectStreamRoundTripRewriter
                 return WithNewData(stream, rewrittenXStream);
             }
 
+            if (mode == ObjectStreamRewriteMode.FormAndObjectPatch &&
+                !string.IsNullOrWhiteSpace(stream.Path) &&
+                stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+                stream.Name.Equals("o", StringComparison.OrdinalIgnoreCase) &&
+                TryRewriteMultiPageInnerTabStripStream(stream, layout, updatesByFormStreamPath, out var rewrittenTabStripStream))
+            {
+                return WithNewData(stream, rewrittenTabStripStream);
+            }
+
             return stream;
         }).Where(stream => !IsUnderRemovedStorage(stream.Path, removedStoragePaths)).ToList();
 
@@ -227,6 +236,167 @@ internal static class ObjectStreamRoundTripRewriter
 
         rewritten = output.ToArray();
         return true;
+    }
+
+    private static bool TryRewriteMultiPageInnerTabStripStream(
+        StorageEntryDump oStream,
+        LayoutInspection layout,
+        Dictionary<string, List<ObjectStreamSizeUpdate>> updatesByFormStreamPath,
+        out byte[] rewritten)
+    {
+        rewritten = [];
+        if (string.IsNullOrWhiteSpace(oStream.Path)) return false;
+
+        var multiPage = layout.Controls.FirstOrDefault(control =>
+            control.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase) &&
+            control.Properties is not null &&
+            TryGetString(control.Properties, "storagePath", out var storagePath) &&
+            $"{storagePath}/o".Equals(oStream.Path, StringComparison.OrdinalIgnoreCase));
+
+        if (multiPage?.Properties is null) return false;
+        if (!TryGetInt(multiPage.Properties, "multiPagePageCount", out var originalPageCount)) return false;
+
+        var pages = layout.Controls
+            .Where(control => control.Type.Equals("Page", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(control.Parent, multiPage.Name, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(control => control.Properties is not null && TryGetInt(control.Properties, "multiPagePageIndex", out var index) ? index : int.MaxValue)
+            .ThenBy(control => control.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (pages.Count == originalPageCount) return false;
+
+        var parsed = ObjectStreamParser.TryReadTabStrip(oStream);
+        if (parsed == null)
+            throw new CliException($"Cannot rewrite MultiPage TabStrip '{oStream.Path}': parser failed.");
+
+        var props = parsed.Properties;
+
+        var captionsBytes = SerializeArrayString(pages, props, "tabCaptions", p => p.Name);
+        var tooltipsBytes = SerializeArrayString(pages, props, "tabTooltips", p => "");
+        var namesBytes = SerializeArrayString(pages, props, "tabNames", p => p.Name);
+        var tagsBytes = SerializeArrayString(pages, props, "tabTags", p => "");
+        var acceleratorsBytes = SerializeArrayString(pages, props, "tabAccelerators", p => "");
+
+        var extraDataBytes = new MemoryStream();
+        if (TryGetString(props, "sizeSource", out var sizeSource) && sizeSource == "tabStripExtraDataBlock")
+        {
+            if (!TryGetInt(props, "tabStripDataBlockEndLocalOffset", out var dataBlockEnd))
+                throw new CliException("Missing tabStripDataBlockEndLocalOffset");
+            extraDataBytes.Write(oStream.Data, dataBlockEnd, 8);
+        }
+        extraDataBytes.Write(captionsBytes);
+        extraDataBytes.Write(tooltipsBytes);
+        extraDataBytes.Write(namesBytes);
+        extraDataBytes.Write(tagsBytes);
+        extraDataBytes.Write(acceleratorsBytes);
+
+        var dataBlock = oStream.Data.AsSpan(0, (int)props["tabStripDataBlockEndLocalOffset"]).ToArray();
+
+        if (TryGetInt(props, "itemsSizeLocalOffset", out var itemsSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(itemsSizeOffset, 4), (uint)captionsBytes.Length);
+        if (TryGetInt(props, "tipStringsSizeLocalOffset", out var tipStringsSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(tipStringsSizeOffset, 4), (uint)tooltipsBytes.Length);
+        if (TryGetInt(props, "namesSizeLocalOffset", out var namesSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(namesSizeOffset, 4), (uint)namesBytes.Length);
+        if (TryGetInt(props, "tagsSizeLocalOffset", out var tagsSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(tagsSizeOffset, 4), (uint)tagsBytes.Length);
+        if (TryGetInt(props, "acceleratorsSizeLocalOffset", out var acceleratorsSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(acceleratorsSizeOffset, 4), (uint)acceleratorsBytes.Length);
+
+        if (TryGetInt(props, "tabsAllocatedLocalOffset", out var tabsAllocatedOffset)) BinaryPrimitives.WriteInt32LittleEndian(dataBlock.AsSpan(tabsAllocatedOffset, 4), pages.Count);
+        if (TryGetInt(props, "tabDataLocalOffset", out var tabDataOffset)) BinaryPrimitives.WriteInt32LittleEndian(dataBlock.AsSpan(tabDataOffset, 4), pages.Count);
+
+        var cbTabStrip = dataBlock.Length - 4 + extraDataBytes.Length;
+        BinaryPrimitives.WriteUInt16LittleEndian(dataBlock.AsSpan(4, 2), (ushort)cbTabStrip);
+
+        var newStream = new MemoryStream();
+        newStream.Write(dataBlock);
+        extraDataBytes.Position = 0;
+        extraDataBytes.CopyTo(newStream);
+
+        if (TryGetInt(props, "tabStripStreamDataLocalOffset", out var streamDataStart) &&
+            TryGetInt(props, "tabStripStreamDataEndLocalOffset", out var streamDataEnd))
+        {
+            newStream.Write(oStream.Data, streamDataStart, streamDataEnd - streamDataStart);
+        }
+
+        if (TryGetInt(props, "textPropsExpectedLocalOffset", out var textPropsStart) &&
+            TryGetInt(props, "textPropsEndLocalOffset", out var textPropsEnd))
+        {
+            newStream.Write(oStream.Data, textPropsStart, textPropsEnd - textPropsStart);
+        }
+
+        var defaultFlag = 3u;
+        if (TryGetObjectList(props, "tabFlags", out var originalFlags) && originalFlags.Count > 0 &&
+            TryGetInt(originalFlags[0], "raw", out var firstRaw))
+        {
+            defaultFlag = (uint)firstRaw;
+        }
+
+        foreach (var page in pages)
+        {
+            var flag = defaultFlag;
+            if (page.Properties is not null && TryGetInt(page.Properties, "multiPagePageIndex", out var originalIdx))
+            {
+                if (TryGetObjectList(props, "tabFlags", out var flags) && originalIdx < flags.Count)
+                {
+                    if (TryGetInt(flags[originalIdx], "raw", out var rawFlag))
+                        flag = (uint)rawFlag;
+                }
+            }
+            var buffer = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(buffer, flag);
+            newStream.Write(buffer);
+        }
+
+        rewritten = newStream.ToArray();
+
+        var multiPageStoragePath = oStream.Path.Substring(0, oStream.Path.Length - 2);
+        var fPath = $"{multiPageStoragePath}/f";
+        if (!updatesByFormStreamPath.TryGetValue(fPath, out var updates))
+        {
+            updates = new List<ObjectStreamSizeUpdate>();
+            updatesByFormStreamPath[fPath] = updates;
+        }
+        updates.Add(new ObjectStreamSizeUpdate("__internal_site_0_TabStrip", fPath, 0, rewritten.Length));
+
+        return true;
+    }
+
+    private static byte[] SerializeArrayString(IReadOnlyList<ControlInfo> pages, Dictionary<string, object?> tabStripProps, string propertyName, Func<ControlInfo, string> fallback)
+    {
+        var entries = new List<Dictionary<string, object?>>();
+        if (TryGetObjectList(tabStripProps, propertyName, out var originalEntries))
+        {
+            entries = originalEntries;
+        }
+
+        var stream = new MemoryStream();
+        if (entries.Count == 0) return stream.ToArray();
+
+        foreach (var page in pages)
+        {
+            string value = fallback(page);
+            bool compressed = true;
+
+            if (page.Properties is not null && TryGetInt(page.Properties, "multiPagePageIndex", out var idx) && idx >= 0 && idx < entries.Count)
+            {
+                if (TryGetString(entries[idx], "value", out var originalValue)) value = originalValue;
+                if (TryGetBool(entries[idx], "compressed", out var originalComp)) compressed = originalComp;
+            }
+
+            var encoded = compressed ? Encoding.Latin1.GetBytes(value) : Encoding.Unicode.GetBytes(value);
+            var byteCount = encoded.Length;
+            var padded = Align4(byteCount);
+
+            var rawCount = (uint)byteCount;
+            if (compressed) rawCount |= 0x8000_0000u;
+
+            var header = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(header, rawCount);
+            stream.Write(header);
+            stream.Write(encoded);
+            if (padded > byteCount)
+            {
+                stream.Write(new byte[padded - byteCount]);
+            }
+        }
+        return stream.ToArray();
     }
 
     private static (int Start, int Length) TryGetFirstPagePropertiesSlice(ControlInfo multiPage, IReadOnlyList<ControlInfo> pages, byte[] xStream)

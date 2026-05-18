@@ -26,6 +26,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 "dump-records" => DumpRecords(args[1..]),
                 "dump-storage" => DumpStorage(args[1..]),
                 "dump-stream-records" => DumpStreamRecords(args[1..]),
+                "check-internal" => CheckInternal(args[1..]),
                 _ => Fail($"Unknown command '{args[0]}'."),
             };
         }
@@ -281,6 +282,29 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var frx = FrxBinary.Read(project.FrxPath);
         var storage = CompoundStorageInspector.Inspect(frx.Bytes, frx.OleOffset);
         WriteJson(parsed.GetOption("out"), StreamRecordInspector.Inspect(storage.Streams));
+        return 0;
+    }
+ 
+    private int CheckInternal(string[] args)
+    {
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
+        var frmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var project = UserFormProject.Load(frmPath);
+        var frx = FrxBinary.Read(project.FrxPath);
+        var storage = CompoundStorageInspector.Inspect(frx.Bytes, frx.OleOffset);
+
+        foreach (var stream in storage.Streams.Where(s => s.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (stream.Name.Equals("f", StringComparison.OrdinalIgnoreCase))
+            {
+                var sites = StructuredMsFormsParser.Parse(stream);
+                stdout.WriteLine($"Stream '{stream.Path}' has {sites.Count} total sites:");
+                foreach (var s in sites)
+                {
+                    stdout.WriteLine($"  - Index: {s.SiteIndex}, Name: '{s.Name}', Type: '{s.ControlType}', Depth: {s.Depth}, IsInternal: {s.IsInternalSite}, Size: {s.StreamEnd - s.StreamStart}");
+                }
+            }
+        }
         return 0;
     }
 

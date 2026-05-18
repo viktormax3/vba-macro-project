@@ -604,7 +604,7 @@ internal static class ObjectStreamParser
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
     }
 
-    private static ObjectStreamProperties? TryReadTabStrip(StorageEntryDump stream)
+    internal static ObjectStreamProperties? TryReadTabStrip(StorageEntryDump stream)
     {
         var data = stream.Data;
         if (data.Length < 8 || data[0] != 0x00 || data[1] != 0x02) return null;
