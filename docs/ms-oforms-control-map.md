@@ -227,4 +227,5 @@ Observed fixture baselines:
 Factory status:
 
 - `Frame`: ready for empty storage-backed containers. The generated storage contains `f`, `o`, and `CompObj`; child controls can be added after the generated frame has been inspected.
-- `MultiPage` / `Page`: pending. They require `x` stream page properties and an internal TabStrip to stay synchronized.
+- `MultiPage`: ready for a generated storage-backed container with `f`, `o`, `x`, copied `CompObj`, internal nameless TabStrip site, internal TabStrip object payload, and initial Page storages.
+- `Page`: ready as part of new `MultiPage` and as direct add under an existing `MultiPage`. Direct add patches the owning `f`, rewrites `x`, rewrites internal TabStrip arrays, creates page storage, and supports later child-control add. Page reorder remains pending.

@@ -23,6 +23,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 "apply" => Apply(args[1..]),
                 "validate" => Validate(args[1..]),
                 "rebuild" => Rebuild(args[1..]),
+                "create" => Create(args[1..]),
                 "dump-records" => DumpRecords(args[1..]),
                 "dump-storage" => DumpStorage(args[1..]),
                 "dump-stream-records" => DumpStreamRecords(args[1..]),
@@ -164,19 +165,70 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var rebuiltProject = UserFormProject.Load(outFrmPath);
         var rebuilt = FrxBinary.Read(rebuiltProject.FrxPath);
         var rebuiltLayout = rebuilt.Inspect(rebuiltProject.KnownControlNames, rebuiltProject.ControlScopes, parserMode);
-        var comparison = RebuildComparison.From(targetLayout, rebuiltLayout);
+        var comparison = RebuildComparison.From(targetLayout, rebuiltLayout) with
+        {
+            InputControlCount = sourceLayout.Controls.Count,
+            ExpectedControlCount = targetLayout.Controls.Count
+        };
 
         stdout.WriteLine($"Wrote {outFrmPath}");
         stdout.WriteLine($"Wrote {outFrxPath}");
         stdout.WriteLine($"OK: rebuilt CFB container and validated with parser mode {parserMode.ToString().ToLowerInvariant()}");
         stdout.WriteLine($"OK: rebuild stream mode {FormatRebuildStreamMode(streamMode)}");
-        stdout.WriteLine($"OK: controls {comparison.SourceControlCount} -> {comparison.RebuiltControlCount}, semantic match: {comparison.SemanticMatch}");
+        stdout.WriteLine($"OK: controls {comparison.InputControlCount} -> {comparison.ExpectedControlCount} -> {comparison.RebuiltControlCount}, semantic match: {comparison.SemanticMatch}");
 
         if (parsed.GetOption("report-out") is { } reportOut)
         {
             WriteJson(reportOut, comparison);
         }
 
+        return 0;
+    }
+
+    private int Create(string[] args)
+    {
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
+        var outFrmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var formName = parsed.GetOption("name") ?? Path.GetFileNameWithoutExtension(outFrmPath);
+        ValidateVbaIdentifier(formName, "name");
+        var caption = parsed.GetOption("caption") ?? formName;
+        var widthPt = GetDoubleOption(parsed, "widthPt", 240);
+        var heightPt = GetDoubleOption(parsed, "heightPt", 180);
+        if (widthPt <= 0 || heightPt <= 0)
+        {
+            throw new CliException("Options '--widthPt' and '--heightPt' must be greater than zero.");
+        }
+
+        var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
+        Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
+        var generated = GeneratedUserFormFactory.Create(formName, caption, widthPt, heightPt, Path.GetFileName(outFrxPath));
+        File.WriteAllBytes(outFrxPath, generated.FrxBytes);
+        File.WriteAllText(outFrmPath, generated.FrmText, Encoding.Default);
+
+        if (parsed.GetOption("patch") is { } patchPath)
+        {
+            var patch = JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(Path.GetFullPath(patchPath)), JsonOptions)
+                ?? throw new CliException("Patch file is empty.");
+            var project = UserFormProject.Load(outFrmPath);
+            var source = FrxBinary.Read(project.FrxPath);
+            var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, ParserMode.Strict);
+            PatchValidator.Validate(patch, sourceLayout.Controls);
+            RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true);
+            var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true);
+            var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, RebuildStreamMode.FormAndObjectPatch);
+            File.WriteAllBytes(outFrxPath, rebuiltBytes);
+
+            var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
+            updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+            File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
+        }
+
+        var validationProject = UserFormProject.Load(outFrmPath);
+        var validation = FrxBinary.Read(validationProject.FrxPath).Inspect(validationProject.KnownControlNames, validationProject.ControlScopes, ParserMode.Strict);
+
+        stdout.WriteLine($"Wrote {outFrmPath}");
+        stdout.WriteLine($"Wrote {outFrxPath}");
+        stdout.WriteLine($"OK: created UserForm '{formName}' with {validation.Controls.Count} controls");
         return 0;
     }
 
@@ -235,6 +287,30 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             RebuildStreamMode.FormAndObjectPatch => "full-patch",
             _ => "container"
         };
+
+    private static double GetDoubleOption(CommandLine parsed, string name, double defaultValue)
+    {
+        var value = parsed.GetOption(name);
+        if (value is null)
+        {
+            return defaultValue;
+        }
+
+        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedValue))
+        {
+            throw new CliException($"Option '--{name}' must be a number.");
+        }
+
+        return parsedValue;
+    }
+
+    private static void ValidateVbaIdentifier(string value, string optionName)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !Regex.IsMatch(value, "^[A-Za-z_][A-Za-z0-9_]{0,30}$"))
+        {
+            throw new CliException($"Option '--{optionName}' must be a valid VBA identifier up to 31 characters.");
+        }
+    }
 
     private int Validate(string[] args)
     {
@@ -336,6 +412,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");
         stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip|object-serialize|object-normalize|object-patch|full-patch] [--patch patch.json] [--report-out rebuild.report.json]");
         stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip reconstructs o streams from parser-identified object slices; object-serialize rewrites fixed-length known fields through control serializers; object-normalize rebuilds o streams with normalized counted strings and updates ObjectStreamSize metadata in f streams; object-patch applies variable-length object-payload property patches before rebuilding; full-patch also rebuilds FormSiteData for layout, renames, add, and remove.");
+        stdout.WriteLine("frxedit create <UserFormNew.frm> --name UserFormNew [--caption Demo] [--widthPt 340] [--heightPt 240] [--patch form.patch.json]");
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");

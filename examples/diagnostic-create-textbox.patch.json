@@ -1,0 +1,13 @@
+{
+  "add": [
+    {
+      "type": "TextBox",
+      "name": "TxtOnly",
+      "leftPt": 18,
+      "topPt": 18,
+      "widthPt": 120,
+      "heightPt": 18,
+      "value": "Texto"
+    }
+  ]
+}

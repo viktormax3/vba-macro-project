@@ -126,6 +126,18 @@
       "widthPt": 140,
       "heightPt": 72,
       "caption": "Frame generado"
+    },
+    {
+      "type": "MultiPage",
+      "name": "MultiPageGenerated",
+      "leftPt": 180,
+      "topPt": 360,
+      "widthPt": 160,
+      "heightPt": 96,
+      "properties": {
+        "pageNames": [ "MpGenPage1", "MpGenPage2" ],
+        "pageCaptions": [ "Pagina 1", "Pagina 2" ]
+      }
     }
   ]
 }

@@ -1,0 +1,13 @@
+{
+  "add": [
+    {
+      "type": "Frame",
+      "name": "FrameOnly",
+      "leftPt": 18,
+      "topPt": 18,
+      "widthPt": 140,
+      "heightPt": 72,
+      "caption": "Grupo"
+    }
+  ]
+}

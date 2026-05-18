@@ -78,6 +78,12 @@ internal sealed class FrxBinary
             return new LayoutInspection(controls, frxFormControl, BuildParserValidationReport(controls, frxFormControl));
         }
 
+        if (frxFormControl is not null && frxFormControl.ContainsKey("formControlParser"))
+        {
+            ValidateParserMode(parserMode, [], frxFormControl);
+            return new LayoutInspection([], frxFormControl, BuildParserValidationReport([], frxFormControl));
+        }
+
         if (parserMode == ParserMode.Strict)
         {
             throw new CliException("Strict parser mode could not parse any MSForms controls from the FRX structured storage.");
@@ -106,6 +112,8 @@ internal sealed class FrxBinary
             throw new CliException($"Strict parser mode rejected the root FormControl: parser warning '{rootWarningKey}' was reported.");
         }
 
+        ValidateStrictRootStorage(frxFormControl);
+
         foreach (var control in controls)
         {
             var props = control.Properties;
@@ -118,6 +126,8 @@ internal sealed class FrxBinary
             {
                 throw new CliException($"Strict parser mode rejected '{control.Name}': legacy scanner fallback was used.");
             }
+
+            ValidateStrictStorageClsid(control, props);
 
             if (string.IsNullOrWhiteSpace(control.Name) || string.IsNullOrWhiteSpace(control.Type) ||
                 control.Type.Equals("Unknown", StringComparison.OrdinalIgnoreCase))
@@ -182,6 +192,62 @@ internal sealed class FrxBinary
             }
         }
     }
+
+    private static void ValidateStrictStorageClsid(ControlInfo control, Dictionary<string, object?> props)
+    {
+        if (!IsStorageBackedControl(control.Type))
+        {
+            return;
+        }
+
+        if (!TryGetPropertyString(props, "ownedStorageClsid", out var clsid) &&
+            !TryGetPropertyString(props, "storageClsid", out clsid))
+        {
+            throw new CliException($"Strict parser mode rejected '{control.Name}': missing storage CLSID metadata.");
+        }
+
+        var expected = ExpectedStorageClsid(control.Type);
+        if (!clsid.Equals(expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Strict parser mode rejected '{control.Name}': storage CLSID '{clsid}' does not match expected '{expected}'.");
+        }
+
+        if (!TryGetPositiveLength(props, "ownedCompObjLength"))
+        {
+            throw new CliException($"Strict parser mode rejected '{control.Name}': missing owned storage CompObj stream.");
+        }
+    }
+
+    private static void ValidateStrictRootStorage(IReadOnlyDictionary<string, object?> frxFormControl)
+    {
+        if (!TryGetPropertyString(frxFormControl, "rootStorageClsid", out var clsid))
+        {
+            throw new CliException("Strict parser mode rejected the FRX: missing root storage CLSID metadata.");
+        }
+
+        var expected = ExpectedStorageClsid("Page");
+        if (!clsid.Equals(expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Strict parser mode rejected the FRX: root storage CLSID '{clsid}' does not match expected '{expected}'.");
+        }
+
+        if (!TryGetPositiveLength(frxFormControl, "rootCompObjLength"))
+        {
+            throw new CliException("Strict parser mode rejected the FRX: missing root CompObj stream.");
+        }
+    }
+
+    private static bool IsStorageBackedControl(string type) =>
+        type.Equals("Frame", StringComparison.OrdinalIgnoreCase) ||
+        type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase) ||
+        type.Equals("Page", StringComparison.OrdinalIgnoreCase);
+
+    private static string ExpectedStorageClsid(string type) =>
+        type.Equals("Frame", StringComparison.OrdinalIgnoreCase)
+            ? "2020186E60F4CE119BCD00AA00608E01"
+            : type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase)
+                ? "7013E3467A3FCE11BED600AA00611080"
+                : "F0692AC6DC16CE119E9800AA00574A4F";
 
     private LayoutInspection InspectByNameScan(
         IReadOnlySet<string>? knownControlNames = null,
@@ -306,6 +372,7 @@ internal sealed class FrxBinary
                 else if (IsRootStoragePath(stream.ParentPath ?? string.Empty))
                 {
                     rootFormControl = BuildRootFormControlProperties(stream, formControlProperties);
+                    AnnotateRootStorage(rootFormControl, storage.Streams);
                 }
             }
 
@@ -349,9 +416,88 @@ internal sealed class FrxBinary
         }
 
         ApplyMultiPageXStreams(controls, storage.Streams, controlsBySiteId);
+        AnnotateStorageBackedControls(controls, storage.Streams);
 
         return controls.Values.ToList();
     }
+
+    private static void AnnotateStorageBackedControls(
+        Dictionary<int, ControlInfo> controls,
+        IReadOnlyList<StorageEntryDump> streams)
+    {
+        var storagesByPath = streams
+            .Where(s => s.Kind.Equals("Storage", StringComparison.OrdinalIgnoreCase))
+            .Where(s => !string.IsNullOrWhiteSpace(s.Path))
+            .GroupBy(s => s.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var compObjStreamsByPath = streams
+            .Where(s => s.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase))
+            .Where(s => s.Name.Equals("\u0001CompObj", StringComparison.Ordinal))
+            .Where(s => !string.IsNullOrWhiteSpace(s.Path))
+            .GroupBy(s => s.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var key in controls.Keys.ToList())
+        {
+            var control = controls[key];
+            if (!IsStorageBackedControl(control.Type) || !TryGetSiteId(control, out var siteId))
+            {
+                continue;
+            }
+
+            var parentStoragePath = TryGetPropertyString(control.Properties, "storagePath");
+            if (string.IsNullOrWhiteSpace(parentStoragePath))
+            {
+                parentStoragePath = "Root Entry";
+            }
+
+            var ownedStoragePath = $"{parentStoragePath}/i{FormatStorageId(siteId)}";
+            if (!storagesByPath.TryGetValue(ownedStoragePath, out var ownedStorage))
+            {
+                continue;
+            }
+
+            var properties = control.Properties is null
+                ? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
+            properties["ownedStoragePath"] = ownedStoragePath;
+            properties["ownedStorageClsid"] = ownedStorage.ClsidHex;
+            var compObjPath = $"{ownedStoragePath}/\u0001CompObj";
+            if (compObjStreamsByPath.TryGetValue(compObjPath, out var compObj))
+            {
+                properties["ownedCompObjPath"] = compObjPath;
+                properties["ownedCompObjLength"] = compObj.Size;
+            }
+
+            controls[key] = control with { Properties = properties };
+        }
+    }
+
+    private static void AnnotateRootStorage(
+        Dictionary<string, object?> rootFormControl,
+        IReadOnlyList<StorageEntryDump> streams)
+    {
+        var root = streams.FirstOrDefault(s =>
+            s.Kind.Equals("Root", StringComparison.OrdinalIgnoreCase) &&
+            IsRootStoragePath(s.Path));
+        if (root is not null)
+        {
+            rootFormControl["rootStorageClsid"] = root.ClsidHex;
+        }
+
+        var rootCompObj = streams.FirstOrDefault(s =>
+            s.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+            s.Name.Equals("\u0001CompObj", StringComparison.Ordinal) &&
+            IsRootStoragePath(s.ParentPath ?? string.Empty));
+        if (rootCompObj is not null)
+        {
+            rootFormControl["rootCompObjPath"] = rootCompObj.Path;
+            rootFormControl["rootCompObjLength"] = rootCompObj.Size;
+        }
+    }
+
+    private static string FormatStorageId(uint id) =>
+        id < 10 ? $"0{id}" : id.ToString(CultureInfo.InvariantCulture);
 
     private static int PathDepth(string? path) =>
         string.IsNullOrEmpty(path) ? 0 : path.Count(ch => ch == '/');
@@ -541,6 +687,47 @@ internal sealed class FrxBinary
             string s => s,
             JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
             _ => value?.ToString(),
+        };
+    }
+
+    private static bool TryGetPropertyString(Dictionary<string, object?>? properties, string name, out string value)
+    {
+        value = TryGetPropertyString(properties, name) ?? string.Empty;
+        return value.Length > 0;
+    }
+
+    private static bool TryGetPropertyString(IReadOnlyDictionary<string, object?>? properties, string name, out string value)
+    {
+        value = string.Empty;
+        if (properties is null || !properties.TryGetValue(name, out var rawValue))
+        {
+            return false;
+        }
+
+        value = rawValue switch
+        {
+            string s => s,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString() ?? string.Empty,
+            _ => rawValue?.ToString() ?? string.Empty,
+        };
+        return value.Length > 0;
+    }
+
+    private static bool TryGetPositiveLength(IReadOnlyDictionary<string, object?>? properties, string name)
+    {
+        if (properties is null || !properties.TryGetValue(name, out var value))
+        {
+            return false;
+        }
+
+        return value switch
+        {
+            ulong u => u > 0,
+            long l => l > 0,
+            int i => i > 0,
+            uint u => u > 0,
+            JsonElement { ValueKind: JsonValueKind.Number } element when element.TryGetUInt64(out var parsed) => parsed > 0,
+            _ => ulong.TryParse(value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0,
         };
     }
 

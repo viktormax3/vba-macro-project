@@ -191,7 +191,7 @@ internal static class RebuildPatchApplier
                 !GeneratedControlFactory.CanCreate(add.Type!) &&
                 !GeneratedStorageFactory.CanCreate(add.Type!))
             {
-                throw new CliException($"Add entry '{add.Name}' requested type '{add.Type}', but this build can create only: {GeneratedControlFactory.SupportedTypes}, Frame. Use 'fromTemplate' for other types.");
+                throw new CliException($"Add entry '{add.Name}' requested type '{add.Type}', but this build can create only: {GeneratedControlFactory.SupportedTypes}, Frame, MultiPage, Page. Use 'fromTemplate' for other types.");
             }
         }
     }
@@ -369,6 +369,34 @@ internal static class RebuildPatchApplier
         return storagePath;
     }
 
+    private static string ResolveTargetMultiPageStoragePath(string controlName, ControlInfo? parentControl)
+    {
+        if (parentControl is null)
+        {
+            throw new CliException($"Add target '{controlName}' is type Page and requires a MultiPage parent.");
+        }
+
+        if (!parentControl.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Add target '{controlName}' is type Page, but parent '{parentControl.Name}' is type '{parentControl.Type}'. Page controls can only be added to a MultiPage.");
+        }
+
+        if (!TryGetOwnedStoragePath(parentControl, [parentControl], out var storagePath))
+        {
+            if (parentControl.Properties is not null &&
+                TryGetString(parentControl.Properties, "storagePath", out var ownerStoragePath) &&
+                TryGetInt(parentControl.Properties, "siteId", out var siteId))
+            {
+                storagePath = $"{ownerStoragePath}/i{FormatStorageId(siteId)}";
+                return storagePath;
+            }
+
+            throw new CliException($"Add target '{controlName}' cannot determine storage path for MultiPage parent '{parentControl.Name}'.");
+        }
+
+        return storagePath;
+    }
+
     private static string FormatStorageId(int id) => id is >= 0 and < 10 ? $"0{id}" : id.ToString(CultureInfo.InvariantCulture);
 
     private static IEnumerable<ControlInfo> BuildMovedControls(
@@ -454,8 +482,17 @@ internal static class RebuildPatchApplier
             }
 
             var parent = add.Parent is null ? template?.Parent : (string.IsNullOrWhiteSpace(add.Parent) ? null : add.Parent.Trim());
+            var controlsForParent = existingControls.Concat(result).ToList();
+            ControlInfo? parentControl = null;
+            if (!string.IsNullOrWhiteSpace(parent))
+            {
+                parentControl = controlsForParent.FirstOrDefault(c => c.Name.Equals(parent, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new CliException($"Target parent '{parent}' does not exist.");
+            }
 
-            var targetStoragePath = ResolveTargetStoragePath(parent, existingControls.Concat(result).ToList());
+            var targetStoragePath = template is null && type!.Equals("Page", StringComparison.OrdinalIgnoreCase)
+                ? ResolveTargetMultiPageStoragePath(name, parentControl)
+                : ResolveTargetStoragePath(parent, controlsForParent);
             var targetStreamPath = $"{targetStoragePath}/f";
 
             if (template is not null && template.Properties is null)
@@ -512,7 +549,60 @@ internal static class RebuildPatchApplier
             var rawWidth = add.RawWidth ?? add.Width ?? ToRawPoints(add.WidthPt) ?? template?.RawWidth;
             var rawHeight = add.RawHeight ?? add.Height ?? ToRawPoints(add.HeightPt) ?? template?.RawHeight;
 
-            if (template is null && type.Equals("Frame", StringComparison.OrdinalIgnoreCase))
+            if (template is null && type.Equals("Page", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parentControl is null || !parentControl.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new CliException($"Add target '{name}' is type Page and must use an existing MultiPage as parent.");
+                }
+
+                var pageIndex = NextMultiPagePageIndex(existingControls.Concat(result), parentControl.Name);
+                var generatedStoragePath = $"{targetStoragePath}/i{FormatStorageId(maxId)}";
+                rawWidth ??= parentControl.RawWidth ?? 0;
+                rawHeight ??= parentControl.RawHeight ?? 0;
+                left = 0;
+                top = 0;
+                var pageCaption = TryGetString(props, "caption", out var captionValue) && !string.IsNullOrWhiteSpace(captionValue)
+                    ? captionValue
+                    : name;
+                props["tabCaption"] = pageCaption;
+                props.Remove("caption");
+                props["tabIndex"] = pageIndex;
+                var generated = GeneratedStorageFactory.CreatePage(
+                    name,
+                    maxId,
+                    pageIndex,
+                    rawWidth ?? 0,
+                    rawHeight ?? 0,
+                    generatedStoragePath,
+                    pageIndex == 0);
+
+                props["generatedFormSitePayload"] = generated.SitePayload;
+                props["siteDepth"] = 0;
+                props["siteType"] = 1;
+                props["siteLocalOffset"] = 0;
+                props["cbSite"] = generated.SitePayload.Length - 4;
+                props["parser"] = "msOFormsFormSiteData";
+                props["siteParser"] = "msOFormsOleSiteConcrete";
+                props["siteBitFlags"] = pageIndex == 0 ? "0x00040021" : "0x00040023";
+                props["formControlParser"] = "msOFormsFormControl";
+                props["formPropMask"] = "0x0C000C48";
+                props["sizeSource"] = "formControlDisplayedSize";
+                props["displayedWidth"] = rawWidth ?? 0;
+                props["displayedHeight"] = rawHeight ?? 0;
+                props["logicalWidth"] = 0;
+                props["logicalHeight"] = 0;
+                props["generatedStoragePath"] = generated.StoragePath;
+                props["generatedStorageF"] = generated.FStream;
+                props["generatedStorageO"] = generated.OStream;
+                props["generatedStorageCompObjKind"] = "Page";
+                props["generatedPageProperties"] = generated.PageProperties;
+                props["multiPageParent"] = parentControl.Name;
+                props["multiPagePageIndex"] = pageIndex;
+                props["multiPagePageId"] = generated.SiteId;
+                props["multiPageXStreamPath"] = $"{targetStoragePath}/x";
+            }
+            else if (template is null && type.Equals("Frame", StringComparison.OrdinalIgnoreCase))
             {
                 var ownedStoragePath = $"{targetStoragePath}/i{FormatStorageId(maxId)}";
                 var generated = GeneratedStorageFactory.CreateFrame(
@@ -536,6 +626,113 @@ internal static class RebuildPatchApplier
                 {
                     props[propertyName] = propertyValue;
                 }
+            }
+            else if (template is null && type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase))
+            {
+                var ownedStoragePath = $"{targetStoragePath}/i{FormatStorageId(maxId)}";
+                var pageNames = MsFormsFactoryBinary.GetStringList(props, "pageNames")?.ToArray()
+                    ?? [$"{name}Page1", $"{name}Page2"];
+                var pageCaptions = MsFormsFactoryBinary.GetStringList(props, "pageCaptions")?.ToArray()
+                    ?? pageNames.Select((_, index) => $"Page{index + 1}").ToArray();
+                if (pageNames.Length != pageCaptions.Length || pageNames.Length == 0)
+                {
+                    throw new CliException($"Add target '{name}' has invalid pageNames/pageCaptions.");
+                }
+
+                foreach (var pageName in pageNames)
+                {
+                    if (!names.Add(pageName))
+                    {
+                        throw new CliException($"Add target '{name}' would create duplicate page '{pageName}'.");
+                    }
+                }
+
+                var generated = GeneratedStorageFactory.CreateMultiPage(
+                    name,
+                    maxId,
+                    (int)props["tabIndex"]!,
+                    left,
+                    top,
+                    rawWidth ?? 0,
+                    rawHeight ?? 0,
+                    ownedStoragePath,
+                    pageNames,
+                    pageCaptions);
+
+                props["generatedFormSitePayload"] = generated.SitePayload;
+                props.Remove("caption");
+                props["siteDepth"] = 0;
+                props["siteType"] = 1;
+                props["siteLocalOffset"] = 0;
+                props["cbSite"] = generated.SitePayload.Length - 4;
+                foreach (var (propertyName, propertyValue) in generated.Metadata)
+                {
+                    props[propertyName] = propertyValue;
+                }
+
+                for (var i = 0; i < generated.Pages.Count; i++)
+                {
+                    var page = generated.Pages[i];
+                    var pageProps = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["isAddedControl"] = true,
+                        ["storagePath"] = ownedStoragePath,
+                        ["streamPath"] = $"{ownedStoragePath}/f",
+                        ["name"] = page.Name,
+                        ["nameRaw"] = page.Name,
+                        ["siteName"] = page.Name,
+                        ["siteId"] = page.SiteId,
+                        ["id"] = page.SiteId,
+                        ["tabIndex"] = i,
+                        ["parser"] = "msOFormsFormSiteData",
+                        ["siteParser"] = "msOFormsOleSiteConcrete",
+                        ["siteBitFlags"] = i == 0 ? "0x00040021" : "0x00040023",
+                        ["formControlParser"] = "msOFormsFormControl",
+                        ["formPropMask"] = "0x0C000C48",
+                        ["sizeSource"] = "formControlDisplayedSize",
+                        ["displayedWidth"] = rawWidth ?? 0,
+                        ["displayedHeight"] = rawHeight ?? 0,
+                        ["logicalWidth"] = 0,
+                        ["logicalHeight"] = 0,
+                        ["siteDepth"] = 0,
+                        ["siteType"] = 1,
+                        ["siteLocalOffset"] = 0,
+                        ["generatedStoragePath"] = page.StoragePath,
+                        ["generatedStorageF"] = page.FStream,
+                        ["generatedStorageO"] = page.OStream,
+                        ["generatedStorageCompObjKind"] = "Page",
+                        ["generatedPageProperties"] = page.PageProperties,
+                        ["multiPageParent"] = name,
+                        ["multiPagePageIndex"] = i,
+                        ["multiPagePageId"] = page.SiteId,
+                        ["multiPageXStreamPath"] = $"{ownedStoragePath}/x"
+                    };
+
+                    result.Add(new ControlInfo(
+                        page.Name,
+                        "Page",
+                        0,
+                        0,
+                        rawWidth,
+                        rawHeight,
+                        0,
+                        0,
+                        rawWidth is int pw ? FromRawPoints(pw) : null,
+                        rawHeight is int ph ? FromRawPoints(ph) : null,
+                        pageProps,
+                        name,
+                        null,
+                        null,
+                        null,
+                        null,
+                        0,
+                        null,
+                        null,
+                        null,
+                        null));
+                }
+
+                maxId += 1 + pageNames.Length;
             }
             else if (template is null)
             {
@@ -627,6 +824,17 @@ internal static class RebuildPatchApplier
         return Math.Min(max + 1, ushort.MaxValue);
     }
 
+    private static int NextMultiPagePageIndex(IEnumerable<ControlInfo> controls, string multiPageName)
+    {
+        var max = controls
+            .Where(c => c.Type.Equals("Page", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(c.Parent, multiPageName, StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Properties is not null && TryGetInt(c.Properties, "multiPagePageIndex", out var index) ? index : -1)
+            .DefaultIfEmpty(-1)
+            .Max();
+        return Math.Min(max + 1, ushort.MaxValue);
+    }
+
     private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout, string? newName)
     {
         if (control.Properties is null)
@@ -693,6 +901,8 @@ internal static class RebuildPatchApplier
                 break;
             case "tabcaptions":
             case "tabnames":
+            case "pagenames":
+            case "pagecaptions":
                 props[CanonicalPropertyName(propertyName)] = RequireStringArray(controlName, propertyName, value);
                 break;
             case "controltiptext":
@@ -739,6 +949,8 @@ internal static class RebuildPatchApplier
             "bordercolor" => "borderColor",
             "tabcaptions" => "tabCaptions",
             "tabnames" => "tabNames",
+            "pagenames" => "pageNames",
+            "pagecaptions" => "pageCaptions",
             _ => propertyName
         };
 

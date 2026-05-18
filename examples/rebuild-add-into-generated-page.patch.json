@@ -1,0 +1,14 @@
+{
+  "add": [
+    {
+      "type": "TextBox",
+      "name": "TxtInsideGeneratedPage",
+      "parent": "PageGenerated",
+      "leftPt": 12,
+      "topPt": 18,
+      "widthPt": 90,
+      "heightPt": 18,
+      "value": "Dentro"
+    }
+  ]
+}

@@ -165,6 +165,16 @@ internal static class ObjectStreamRoundTripRewriter
             stream.Name.Equals("\u0001CompObj", StringComparison.Ordinal) &&
             stream.Path.Contains("/i", StringComparison.OrdinalIgnoreCase) &&
             stream.Size == 112);
+        var multiPageCompObj = result.FirstOrDefault(stream =>
+            stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+            stream.Name.Equals("\u0001CompObj", StringComparison.Ordinal) &&
+            stream.Path.Contains("/i", StringComparison.OrdinalIgnoreCase) &&
+            stream.Size == 115);
+        var pageCompObj = result.FirstOrDefault(stream =>
+            stream.Kind.Equals("Stream", StringComparison.OrdinalIgnoreCase) &&
+            stream.Name.Equals("\u0001CompObj", StringComparison.Ordinal) &&
+            stream.Path.Contains("/i", StringComparison.OrdinalIgnoreCase) &&
+            stream.Size == 110);
 
         foreach (var control in layout.Controls)
         {
@@ -176,6 +186,8 @@ internal static class ObjectStreamRoundTripRewriter
                 continue;
             }
 
+            AddStorage(storagePath, control.Type);
+
             if (TryGetByteArray(props, "generatedStorageF", out var fBytes))
             {
                 AddStream($"{storagePath}/f", "f", fBytes);
@@ -186,9 +198,20 @@ internal static class ObjectStreamRoundTripRewriter
                 AddStream($"{storagePath}/o", "o", oBytes);
             }
 
-            if (frameCompObj is not null)
+            if (TryGetByteArray(props, "generatedStorageX", out var xBytes))
             {
-                AddStream($"{storagePath}/\u0001CompObj", "\u0001CompObj", frameCompObj.Data);
+                AddStream($"{storagePath}/x", "x", xBytes);
+            }
+
+            var kind = TryGetString(props, "generatedStorageCompObjKind", out var rawKind) ? rawKind : "Frame";
+            var compObj = kind.Equals("MultiPage", StringComparison.OrdinalIgnoreCase)
+                ? multiPageCompObj?.Data ?? MsFormsCompObjFactory.MultiPage
+                : kind.Equals("Page", StringComparison.OrdinalIgnoreCase)
+                    ? pageCompObj?.Data ?? MsFormsCompObjFactory.Form
+                    : frameCompObj?.Data ?? MsFormsCompObjFactory.Frame;
+            if (compObj.Length > 0)
+            {
+                AddStream($"{storagePath}/\u0001CompObj", "\u0001CompObj", compObj);
             }
         }
 
@@ -219,7 +242,41 @@ internal static class ObjectStreamRoundTripRewriter
                 ParentPath = path.Contains('/') ? path[..path.LastIndexOf('/')] : null
             });
         }
+
+        void AddStorage(string path, string type)
+        {
+            if (!existingPaths.Add(path))
+            {
+                return;
+            }
+
+            result.Add(new StorageEntryDump(
+                nextIndex++,
+                path[(path.LastIndexOf('/') + 1)..],
+                "Storage",
+                -1,
+                0,
+                false,
+                string.Empty,
+                null,
+                null,
+                [],
+                [],
+                [],
+                ClsidHex: StorageClsidForType(type))
+            {
+                Path = path,
+                ParentPath = path.Contains('/') ? path[..path.LastIndexOf('/')] : null
+            });
+        }
     }
+
+    private static string StorageClsidForType(string type) =>
+        type.Equals("Frame", StringComparison.OrdinalIgnoreCase)
+            ? "2020186E60F4CE119BCD00AA00608E01"
+            : type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase)
+                ? "7013E3467A3FCE11BED600AA00611080"
+                : "F0692AC6DC16CE119E9800AA00574A4F";
 
     private static bool IsUnderRemovedStorage(string? streamPath, IReadOnlyList<string> removedStoragePaths)
     {
@@ -291,8 +348,8 @@ internal static class ObjectStreamRoundTripRewriter
 
         foreach (var page in pages)
         {
-            var pageSlice = GetPagePropertiesSlice(page, data);
-            output.Write(data, pageSlice.Start, pageSlice.Length);
+            var pageProperties = GetPagePropertiesBytes(page, data);
+            output.Write(pageProperties, 0, pageProperties.Length);
         }
 
         var multiPageBytes = data.AsSpan(multiPageProperties.Start, multiPageProperties.Length).ToArray();
@@ -313,12 +370,12 @@ internal static class ObjectStreamRoundTripRewriter
 
         output.Write(multiPageBytes, 0, multiPageBytes.Length);
 
+        var pageIdBuffer = new byte[4];
         foreach (var page in pages)
         {
             var pageId = GetPageId(page);
-            Span<byte> buffer = stackalloc byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(buffer, pageId);
-            output.Write(buffer);
+            BinaryPrimitives.WriteUInt32LittleEndian(pageIdBuffer, pageId);
+            output.Write(pageIdBuffer);
         }
 
         rewritten = output.ToArray();
@@ -359,7 +416,7 @@ internal static class ObjectStreamRoundTripRewriter
 
         var props = parsed.Properties;
 
-        var captionsBytes = SerializeArrayString(pages, props, "tabCaptions", p => p.Name);
+        var captionsBytes = SerializeArrayString(pages, props, "tabCaptions", GetPageCaption);
         var tooltipsBytes = SerializeArrayString(pages, props, "tabTooltips", p => "");
         var namesBytes = SerializeArrayString(pages, props, "tabNames", p => p.Name);
         var tagsBytes = SerializeArrayString(pages, props, "tabTags", p => "");
@@ -378,7 +435,12 @@ internal static class ObjectStreamRoundTripRewriter
         extraDataBytes.Write(tagsBytes);
         extraDataBytes.Write(acceleratorsBytes);
 
-        var dataBlock = oStream.Data.AsSpan(0, (int)props["tabStripDataBlockEndLocalOffset"]).ToArray();
+        if (!TryGetInt(props, "tabStripDataBlockEndLocalOffset", out var tabStripDataBlockEnd))
+        {
+            throw new CliException($"Cannot rewrite MultiPage TabStrip '{oStream.Path}': missing tabStripDataBlockEndLocalOffset.");
+        }
+
+        var dataBlock = oStream.Data.AsSpan(0, tabStripDataBlockEnd).ToArray();
 
         if (TryGetInt(props, "itemsSizeLocalOffset", out var itemsSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(itemsSizeOffset, 4), (uint)captionsBytes.Length);
         if (TryGetInt(props, "tipStringsSizeLocalOffset", out var tipStringsSizeOffset)) BinaryPrimitives.WriteUInt32LittleEndian(dataBlock.AsSpan(tipStringsSizeOffset, 4), (uint)tooltipsBytes.Length);
@@ -484,7 +546,8 @@ internal static class ObjectStreamRoundTripRewriter
 
     private static (int Start, int Length) TryGetFirstPagePropertiesSlice(ControlInfo multiPage, IReadOnlyList<ControlInfo> pages, byte[] xStream)
     {
-        if (pages.Count > 0 && pages[0].Properties is not null && TryGetInt(pages[0].Properties, "pagePropertiesLocalOffset", out var firstPageOffset))
+        var firstPageProperties = pages.Count > 0 ? pages[0].Properties : null;
+        if (firstPageProperties is not null && TryGetInt(firstPageProperties, "pagePropertiesLocalOffset", out var firstPageOffset))
         {
             if (firstPageOffset <= 0 || firstPageOffset > xStream.Length)
             {
@@ -514,6 +577,33 @@ internal static class ObjectStreamRoundTripRewriter
         }
 
         return CheckedSlice(offset, checked(4 + cbPage), xStream.Length, $"{page.Name}.PageProperties");
+    }
+
+    private static byte[] GetPagePropertiesBytes(ControlInfo page, byte[] xStream)
+    {
+        if (page.Properties is not null &&
+            TryGetByteArray(page.Properties, "generatedPageProperties", out var generatedPageProperties))
+        {
+            return generatedPageProperties;
+        }
+
+        var pageSlice = GetPagePropertiesSlice(page, xStream);
+        return xStream.AsSpan(pageSlice.Start, pageSlice.Length).ToArray();
+    }
+
+    private static string GetPageCaption(ControlInfo page)
+    {
+        if (page.Properties is not null && TryGetString(page.Properties, "caption", out var caption))
+        {
+            return caption;
+        }
+
+        if (page.Properties is not null && TryGetString(page.Properties, "tabCaption", out var tabCaption))
+        {
+            return tabCaption;
+        }
+
+        return page.Name;
     }
 
     private static (int Start, int Length) GetMultiPagePropertiesSlice(ControlInfo multiPage, byte[] xStream)
@@ -800,15 +890,31 @@ internal static class ObjectStreamRoundTripRewriter
 
         var cbForm = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
         var siteDataOffset = 4 + cbForm;
-        if (siteDataOffset < 0 || siteDataOffset + 10 > data.Length)
+        if (siteDataOffset < 0 || siteDataOffset + 8 > data.Length)
         {
             return null;
         }
 
-        var classInfoCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(siteDataOffset, 2));
-        var countOfSites = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 2, 4));
-        var countOfBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 6, 4));
-        if (classInfoCount != 0 || countOfSites != 0 || countOfBytes != 0)
+        var hasClassInfoCount = false;
+        var countOfSites = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset, 4));
+        var countOfBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 4, 4));
+        if (siteDataOffset + 10 <= data.Length)
+        {
+            var classInfoCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(siteDataOffset, 2));
+            var countOfSitesWithClassInfo = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 2, 4));
+            var countOfBytesWithClassInfo = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(siteDataOffset + 6, 4));
+            if (classInfoCount == 0 &&
+                countOfSitesWithClassInfo == 0 &&
+                countOfBytesWithClassInfo == 0 &&
+                (countOfSites != 0 || countOfBytes != 0 || data.Length == siteDataOffset + 10))
+            {
+                countOfSites = countOfSitesWithClassInfo;
+                countOfBytes = countOfBytesWithClassInfo;
+                hasClassInfoCount = true;
+            }
+        }
+
+        if (countOfSites != 0 || countOfBytes != 0)
         {
             return null;
         }
@@ -829,7 +935,11 @@ internal static class ObjectStreamRoundTripRewriter
 
         using var output = new MemoryStream();
         output.Write(data, 0, siteDataOffset);
-        MsFormsFactoryBinary.WriteUInt16(output, 0);
+        if (hasClassInfoCount)
+        {
+            MsFormsFactoryBinary.WriteUInt16(output, 0);
+        }
+
         MsFormsFactoryBinary.WriteUInt32(output, checked((uint)additions.Count));
         MsFormsFactoryBinary.WriteUInt32(output, checked((uint)payload.Length));
         output.Write(payload.ToArray());
@@ -1054,7 +1164,7 @@ internal static class ObjectStreamRoundTripRewriter
                 }
             }
 
-            result.Add(new FormSiteSlice(control, templateStart, checked(cbSite + 4), sourceStreamPath));
+            result.Add(new FormSiteSlice(control, templateStart, checked(cbSite + 4), sourceStreamPath ?? string.Empty));
         }
 
         return result;

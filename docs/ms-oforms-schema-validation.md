@@ -48,6 +48,8 @@ Ready:
 - `SpinButton`
 - `TabStrip`
 - `Frame` empty storage-backed container
+- `MultiPage` storage-backed container with generated `x` stream, internal TabStrip, and initial Page storages
+- `Page` storage-backed container generated under an existing `MultiPage`
 
 Pending leaf factories:
 
@@ -55,9 +57,7 @@ Pending leaf factories:
 
 Pending storage factories:
 
-- `MultiPage`
-- `Page`
-- root `UserForm`
+- none
 
 ## Structural Rules
 
@@ -74,4 +74,27 @@ dotnet build FrxEdit.sln
 dotnet run --no-build --project src/FrxEdit.Cli -- validate userformallcontrol.frm --mode strict
 dotnet run --no-build --project src/FrxEdit.Cli -- rebuild userformallcontrol.frm --out out/userformallcontrol.add-generated.frm --mode strict --stream-mode full-patch --patch examples/rebuild-add-generated.patch.json --report-out out/userformallcontrol.add-generated.report.json
 dotnet run --no-build --project src/FrxEdit.Cli -- inspect out/userformallcontrol.add-generated.frm --mode strict --out out/userformallcontrol.add-generated.inspect.json --raw-out out/userformallcontrol.add-generated.inspect.raw.json
+dotnet run --no-build --project src/FrxEdit.Cli -- create out/CreatePatched.frm --name CreatePatched --caption "Desde cero" --widthPt 340 --heightPt 240 --patch examples/create-form.patch.json
 ```
+
+Latest generated `MultiPage` acceptance:
+
+- `validate out/userformallcontrol.add-generated.frm --mode strict`: 37 controls detected.
+- `rebuild` report: `semanticMatch: true`.
+- strict raw parser diagnostics: `legacyScannerCount: 0`, `warningCount: 0`, `errorCount: 0`.
+- `MultiPageGenerated` has `multiPageXStreamValidation: exact` and pages `MpGenPage1`/`MpGenPage2` mapped to parent `MultiPageGenerated`.
+
+Latest direct `Page` acceptance:
+
+- `rebuild userformallcontrol.frm --patch examples/rebuild-add-page.patch.json`: `semanticMatch: true`.
+- `validate out/userformallcontrol.add-page.frm --mode strict`: 22 controls detected.
+- strict raw parser diagnostics after add: `legacyScannerCount: 0`, `warningCount: 0`, `errorCount: 0`.
+- chained add into generated page using `examples/rebuild-add-into-generated-page.patch.json`: `semanticMatch: true`, strict validate detects 23 controls.
+
+Latest create-from-zero acceptance:
+
+- `create out/CreateEmpty.frm --name CreateEmpty --caption Demo --widthPt 340 --heightPt 240`: strict validate detects 0 controls and root FormControl metadata.
+- `create out/CreatePatched.frm --name CreatePatched --caption "Desde cero" --widthPt 340 --heightPt 240 --patch examples/create-form.patch.json`: strict validate detects 6 controls.
+- generated-from-zero raw parser diagnostics: `legacyScannerCount: 0`, `warningCount: 0`, `errorCount: 0`.
+- generated `MultiNuevo` has `multiPageXStreamValidation: exact` and pages `PageUno`/`PageDos`.
+- strict raw output includes root storage CLSID plus `CompObj`, and owned storage CLSID plus `CompObj` for generated `Frame`, `MultiPage`, and `Page` storages.

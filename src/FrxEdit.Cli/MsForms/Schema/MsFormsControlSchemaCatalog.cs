@@ -15,8 +15,8 @@ internal static class MsFormsControlSchemaCatalog
         new("SpinButton", "2.2.8", "msOFormsSpinButton", "0x00000808", null, null, "0x00000013", "SpinButtonDataBlock, SpinButtonExtraDataBlock, SpinButtonStreamData", FactoryStatus.Ready),
         new("TabStrip", "2.2.9", "msOFormsTabStrip", "0x00FA8031", "0x00000035", null, "0x00000013", "TabStripDataBlock, TabStripExtraDataBlock, TabStripStreamData, TextProps, TabStripTabFlagData", FactoryStatus.Ready),
         new("Frame", "2.2.10", "msOFormsFormSiteData", null, null, null, "0x00040023", "Storage-backed FormControl/FormSiteData plus parent object metadata", FactoryStatus.Ready),
-        new("MultiPage", "2.2.6", "msOFormsFormSiteData", null, null, null, "0x00040023", "Storage-backed FormControl/FormSiteData plus x stream and inner TabStrip", FactoryStatus.PendingStorageFactory),
-        new("Page", "2.2.6.4", "msOFormsFormSiteData", null, null, null, "0x00040021/0x00040023", "PageProperties inside MultiPage x stream plus page storage", FactoryStatus.PendingStorageFactory),
+        new("MultiPage", "2.2.6", "msOFormsFormSiteData", null, null, null, "0x00040023", "Storage-backed FormControl/FormSiteData plus x stream, inner TabStrip, and generated Page storages", FactoryStatus.Ready),
+        new("Page", "2.2.6.4", "msOFormsFormSiteData", null, null, null, "0x00040021/0x00040023", "Generated as part of a new MultiPage or added directly under an existing MultiPage with synchronized x stream and internal TabStrip", FactoryStatus.Ready),
     ];
 
     public static bool TryGet(string type, out MsFormsControlSchemaInfo info)

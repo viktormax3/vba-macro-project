@@ -4,6 +4,9 @@ internal sealed record RebuildComparison(
     bool SemanticMatch,
     IReadOnlyList<string> Differences)
 {
+    public int? InputControlCount { get; init; }
+    public int? ExpectedControlCount { get; init; }
+
     public static RebuildComparison From(LayoutInspection source, LayoutInspection rebuilt)
     {
         var differences = new List<string>();

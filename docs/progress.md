@@ -30,10 +30,18 @@
 - `TabStrip` generation now supports a standalone two-or-more-tab baseline with `ArrayString` tab captions/names and visible+enabled tab flags.
 - `Frame` generation now creates a storage-backed empty container with parent OleSiteConcrete, owned `iXX/f`, owned `iXX/o`, and copied Frame `CompObj` when a fixture source is available.
 - Empty generated Frame storages can be targeted by later rebuilds; the rebuilder can now create FormSiteData from an empty `CountOfSites = 0` stream.
+- `MultiPage` generation now creates a storage-backed container with parent OleSiteConcrete, owned `iXX/f`, `iXX/o`, `iXX/x`, copied MultiPage `CompObj`, internal TabStrip object payload, and generated initial Page storages.
+- Generated `MultiPage` pages are parsed in strict mode as real `Page` controls with exact `x` stream validation and no legacy scanner fallback.
+- Direct `Page` add under an existing `MultiPage` now creates a page storage, patches the owning MultiPage `f`, rewrites `x`, rewrites the internal TabStrip arrays, and can be targeted by a later child-control add.
+- Empty generated Page storages can be targeted by later rebuilds whether their empty FormSiteData uses class-info-count or no-class-count layout.
+- `frxedit create` now generates a `.frm/.frx` pair from zero with a strict-parseable empty UserForm, and can immediately apply a full-patch add document.
+- Built-in `CompObj` baselines are available for Form/Page, Frame, and MultiPage so generated containers no longer depend on source fixture CompObj streams.
+- Strict validation now checks root/container storage CLSIDs and required `CompObj` streams, catching OLE storage defects that can pass parser-only validation but fail in the native designer.
+- The previous `ObjectStreamRoundTripRewriter` build warnings have been resolved; current build is clean.
 - Added `MsFormsControlSchemaCatalog` as the internal checklist for spec section, parser, masks, TextProps, site flags, and factory readiness per control type.
 - Added `docs/ms-oforms-schema-validation.md` with the strict-inspect baseline for all common controls in `userformallcontrol`.
 - Generated control add writes document-backed `OleSiteConcrete` site bytes plus object payload bytes and re-inspects with strict parser semantic match.
-- Example fixture `examples/rebuild-add-generated.patch.json` demonstrates no-template add for all current leaf factories.
+- Example fixture `examples/rebuild-add-generated.patch.json` demonstrates no-template add for all current leaf factories plus `Frame` and `MultiPage`.
 
 ## Current Code Shape
 
@@ -52,11 +60,9 @@
 
 ## Next Targets
 
-1. Add storage factories for `MultiPage` and `Page`, including `x` stream bootstrapping and internal TabStrip generation.
-2. Implement `Page` add/reorder under `MultiPage`, keeping `x`, inner TabStrip, internal sites, and page storages synchronized.
-3. Add binary picture payload support for `Image` and picture-capable controls.
-4. Add `frxedit create` to generate a new `.frm/.frx` pair from zero.
-5. Run import validation in Corel and Office/VBA as the final acceptance layer.
+1. Implement `Page` reorder under existing `MultiPage`, keeping `x`, inner TabStrip, internal sites, and page storages synchronized.
+2. Run import validation in Corel and Office/VBA for generated-from-zero forms after the strict OLE storage checks.
+3. Add binary picture payload support for `Image` and picture-capable controls as the final feature layer.
 
 ## Working Rule
 

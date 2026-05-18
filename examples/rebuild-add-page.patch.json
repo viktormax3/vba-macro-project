@@ -1,0 +1,10 @@
+{
+  "add": [
+    {
+      "type": "Page",
+      "name": "PageGenerated",
+      "parent": "MultiPage1",
+      "caption": "Generada"
+    }
+  ]
+}

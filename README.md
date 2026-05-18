@@ -10,6 +10,7 @@ dotnet run --project src/FrxEdit.Cli -- inspect UserForm1.frm --out layout.json 
 dotnet run --project src/FrxEdit.Cli -- apply UserForm1.frm sample.patch.json --out UserForm1.patched.frm
 dotnet run --project src/FrxEdit.Cli -- validate UserForm1.patched.frm
 dotnet run --project src/FrxEdit.Cli -- rebuild userformallcontrol.frm --out out/userformallcontrol.rebuilt.frm --mode strict --stream-mode full-patch --patch examples/rebuild-add-generated.patch.json --report-out out/userformallcontrol.rebuilt.report.json
+dotnet run --project src/FrxEdit.Cli -- create out/CreatePatched.frm --name CreatePatched --caption "Desde cero" --widthPt 340 --heightPt 240 --patch examples/create-form.patch.json
 dotnet run --project src/FrxEdit.Cli -- dump-records UserForm1.frm --around TextBox3 --before 4 --after 6 --out records.json
 dotnet run --project src/FrxEdit.Cli -- dump-storage UserForm1.frm --out storage.json
 ```
@@ -72,15 +73,15 @@ Example generated add without `fromTemplate`:
 }
 ```
 
-The first factory-backed types are `CommandButton`, `Label`, and `TextBox`. Other common controls can still be added through `fromTemplate` while their document-backed factories are implemented.
+Factory-backed adds now cover the common MSForms controls in `userformallcontrol`: `CommandButton`, `Label`, `TextBox`, `ComboBox`, `ListBox`, `CheckBox`, `OptionButton`, `ToggleButton`, `Image` without binary picture payload, `ScrollBar`, `SpinButton`, `TabStrip`, `Frame`, `MultiPage`, and `Page`.
 `parent` can target the root form, a `Frame`, or a `Page` for common controls. Direct common-control add to `MultiPage` is rejected; pages belong under `MultiPage`.
+`create` generates a new `.frm/.frx` pair from zero and can immediately apply a full-patch add document.
 
 Object streams are parsed from `[MS-OFORMS]` layouts (`PropMask`, `DataBlock`, `ExtraDataBlock`, `TextProps`, and MorphData where applicable) instead of nearby-byte guessing.
+Strict validation also verifies OLE storage CLSIDs and required `CompObj` streams for the root form and generated container storages.
 
 ## Current Limits
 
-- The document-backed factory layer currently creates `CommandButton`, `Label`, and `TextBox` only.
-- Creating a complete UserForm from zero is still pending; current rebuilds start from an existing `.frm/.frx` pair.
-- Adding into an empty target `FormSiteData` stream is intentionally guarded until the site/class-table bootstrap path is implemented.
-- `MultiPage` page add/reorder and full new `MultiPage` creation are still the next factory/storage milestone.
+- Binary picture payload creation for `Image` and picture-capable controls is intentionally left for the final feature layer.
+- `MultiPage` page reorder is still pending; add/remove is supported.
 - Compatibility must still be confirmed by importing generated outputs in both Corel and Office/VBA; strict parser validation is necessary but not the final acceptance signal.
