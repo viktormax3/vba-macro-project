@@ -1,0 +1,42 @@
+{
+  "add": [
+    { "type": "CommandButton", "name": "RootBtnRun", "leftPt": 12, "topPt": 12, "widthPt": 78, "heightPt": 24, "caption": "Root Btn" },
+    { "type": "Label", "name": "RootLblTitle", "leftPt": 100, "topPt": 16, "widthPt": 130, "heightPt": 14, "caption": "Root label" },
+    { "type": "TextBox", "name": "RootTxtValue", "leftPt": 240, "topPt": 14, "widthPt": 120, "heightPt": 18, "value": "Root text" },
+    { "type": "ComboBox", "name": "RootCmbMode", "leftPt": 370, "topPt": 14, "widthPt": 90, "heightPt": 18 },
+    { "type": "ListBox", "name": "RootLstItems", "leftPt": 470, "topPt": 12, "widthPt": 95, "heightPt": 54 },
+    { "type": "CheckBox", "name": "RootChkEnabled", "leftPt": 12, "topPt": 48, "widthPt": 95, "heightPt": 18, "caption": "Enabled" },
+    { "type": "OptionButton", "name": "RootOptA", "leftPt": 115, "topPt": 48, "widthPt": 70, "heightPt": 18, "caption": "A" },
+    { "type": "OptionButton", "name": "RootOptB", "leftPt": 190, "topPt": 48, "widthPt": 70, "heightPt": 18, "caption": "B" },
+    { "type": "ToggleButton", "name": "RootTglLock", "leftPt": 270, "topPt": 44, "widthPt": 90, "heightPt": 24, "caption": "Toggle" },
+    { "type": "SpinButton", "name": "RootSpn", "leftPt": 370, "topPt": 44, "widthPt": 14, "heightPt": 34 },
+    { "type": "ScrollBar", "name": "RootScr", "leftPt": 395, "topPt": 44, "widthPt": 14, "heightPt": 54 },
+    { "type": "Image", "name": "RootImgEmpty", "leftPt": 420, "topPt": 44, "widthPt": 36, "heightPt": 36 },
+    {
+      "type": "TabStrip",
+      "name": "RootTabs",
+      "leftPt": 470,
+      "topPt": 76,
+      "widthPt": 120,
+      "heightPt": 52,
+      "properties": {
+        "tabCaptions": [ "Alpha", "Beta", "Gamma" ],
+        "tabNames": [ "TabAlpha", "TabBeta", "TabGamma" ]
+      }
+    },
+    { "type": "Frame", "name": "FrameOuter", "leftPt": 12, "topPt": 92, "widthPt": 250, "heightPt": 170, "caption": "Outer frame" },
+    {
+      "type": "MultiPage",
+      "name": "MainPages",
+      "leftPt": 280,
+      "topPt": 145,
+      "widthPt": 300,
+      "heightPt": 170,
+      "properties": {
+        "pageNames": [ "PageData", "PageOptions", "PageNested" ],
+        "pageCaptions": [ "Data", "Options", "Nested" ]
+      }
+    },
+    { "type": "Frame", "name": "FrameWithPages", "leftPt": 12, "topPt": 280, "widthPt": 250, "heightPt": 170, "caption": "Frame plus pages" }
+  ]
+}

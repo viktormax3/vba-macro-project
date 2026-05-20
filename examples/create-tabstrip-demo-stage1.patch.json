@@ -1,0 +1,43 @@
+{
+  "add": [
+    {
+      "type": "TabStrip",
+      "name": "TsSections",
+      "leftPt": 12,
+      "topPt": 12,
+      "widthPt": 260,
+      "heightPt": 22,
+      "properties": {
+        "tabCaptions": [ "Alpha", "Beta", "Gamma" ],
+        "tabNames": [ "TabAlpha", "TabBeta", "TabGamma" ]
+      }
+    },
+    {
+      "type": "Frame",
+      "name": "FrameAlpha",
+      "leftPt": 12,
+      "topPt": 38,
+      "widthPt": 260,
+      "heightPt": 96,
+      "caption": "Alpha"
+    },
+    {
+      "type": "Frame",
+      "name": "FrameBeta",
+      "leftPt": 12,
+      "topPt": 38,
+      "widthPt": 260,
+      "heightPt": 96,
+      "caption": "Beta"
+    },
+    {
+      "type": "Frame",
+      "name": "FrameGamma",
+      "leftPt": 12,
+      "topPt": 38,
+      "widthPt": 260,
+      "heightPt": 96,
+      "caption": "Gamma"
+    }
+  ]
+}

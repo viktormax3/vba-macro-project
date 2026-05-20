@@ -1,0 +1,64 @@
+{
+  "add": [
+    {
+      "type": "Label",
+      "name": "LblAlpha",
+      "parent": "FrameAlpha",
+      "leftPt": 12,
+      "topPt": 18,
+      "widthPt": 170,
+      "heightPt": 14,
+      "caption": "Contenido de Alpha"
+    },
+    {
+      "type": "TextBox",
+      "name": "TxtAlpha",
+      "parent": "FrameAlpha",
+      "leftPt": 12,
+      "topPt": 40,
+      "widthPt": 140,
+      "heightPt": 18,
+      "value": "Alpha activo"
+    },
+    {
+      "type": "Label",
+      "name": "LblBeta",
+      "parent": "FrameBeta",
+      "leftPt": 12,
+      "topPt": 18,
+      "widthPt": 170,
+      "heightPt": 14,
+      "caption": "Contenido de Beta"
+    },
+    {
+      "type": "CheckBox",
+      "name": "ChkBeta",
+      "parent": "FrameBeta",
+      "leftPt": 12,
+      "topPt": 40,
+      "widthPt": 130,
+      "heightPt": 18,
+      "caption": "Beta checked"
+    },
+    {
+      "type": "Label",
+      "name": "LblGamma",
+      "parent": "FrameGamma",
+      "leftPt": 12,
+      "topPt": 18,
+      "widthPt": 170,
+      "heightPt": 14,
+      "caption": "Contenido de Gamma"
+    },
+    {
+      "type": "CommandButton",
+      "name": "BtnGamma",
+      "parent": "FrameGamma",
+      "leftPt": 12,
+      "topPt": 40,
+      "widthPt": 90,
+      "heightPt": 24,
+      "caption": "Gamma"
+    }
+  ]
+}

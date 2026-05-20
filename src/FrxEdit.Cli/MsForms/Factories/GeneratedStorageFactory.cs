@@ -26,7 +26,7 @@ internal static class GeneratedStorageFactory
             0x0004_0023);
 
         var frameCaption = string.IsNullOrWhiteSpace(caption) ? name : caption!;
-        var fStream = BuildFrameFormStream(frameCaption, width, height);
+        var fStream = BuildFrameFormStream(frameCaption, width, height, siteId);
 
         var metadata = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -51,7 +51,7 @@ internal static class GeneratedStorageFactory
         return new GeneratedStorageControlBytes(sitePayload, metadata);
     }
 
-    private static byte[] BuildFrameFormStream(string caption, int width, int height)
+    private static byte[] BuildFrameFormStream(string caption, int width, int height, int siteId)
     {
         var captionBytes = Encoding.Latin1.GetBytes(caption);
 
@@ -77,13 +77,16 @@ internal static class GeneratedStorageFactory
         MsFormsFactoryBinary.WriteUInt32(formControl, 0x081A_0C40);
         formControl.Write(dataBlock.ToArray());
         formControl.Write(extra.ToArray());
+        formControl.Write(BuildDefaultFontStreamData());
 
-        using var siteData = new MemoryStream();
-        MsFormsFactoryBinary.WriteUInt16(siteData, 0);
-        MsFormsFactoryBinary.WriteUInt32(siteData, 0);
-        MsFormsFactoryBinary.WriteUInt32(siteData, 0);
+        return formControl.ToArray();
+    }
 
-        return [.. formControl.ToArray(), .. siteData.ToArray()];
+    private static byte[] BuildDefaultFontStreamData()
+    {
+        // Matches the minimal Frame FormControl font StreamData persisted by the native
+        // designer for a default Tahoma frame.
+        return Convert.FromHexString("0352E30B918FCE119DE300AA004BB85101000000900144420100065461686F6D610000000000000000");
     }
 
     public static GeneratedMultiPageControlBytes CreateMultiPage(
@@ -191,12 +194,12 @@ internal static class GeneratedStorageFactory
     }
 
     private static byte[] BuildMultiPageFormStream(int width, int height, int nextAvailableId, IReadOnlyList<byte[]> sites) =>
-        BuildContainerFormStream(width, height, nextAvailableId + 2 + sites.Count, sites);
+        BuildContainerFormStream(width, height, nextAvailableId + 2 + sites.Count, sites, includePageTail: true);
 
     private static byte[] BuildPageFormStream(int width, int height, int nextAvailableId) =>
-        BuildContainerFormStream(width, height, nextAvailableId + 2, []);
+        BuildContainerFormStream(width, height, nextAvailableId + 2, [], includePageTail: false);
 
-    private static byte[] BuildContainerFormStream(int width, int height, int nextAvailableId, IReadOnlyList<byte[]> sites)
+    private static byte[] BuildContainerFormStream(int width, int height, int nextAvailableId, IReadOnlyList<byte[]> sites, bool includePageTail)
     {
         using var dataBlock = new MemoryStream();
         MsFormsFactoryBinary.WriteUInt32(dataBlock, checked((uint)nextAvailableId));
@@ -233,7 +236,9 @@ internal static class GeneratedStorageFactory
         MsFormsFactoryBinary.WriteUInt32(siteData, checked((uint)sites.Count));
         MsFormsFactoryBinary.WriteUInt32(siteData, checked((uint)payload.Length));
         siteData.Write(payload.ToArray());
-        return [.. formControl.ToArray(), .. siteData.ToArray()];
+        return includePageTail
+            ? [.. formControl.ToArray(), .. siteData.ToArray(), .. BuildDefaultMultiPageTail()]
+            : [.. formControl.ToArray(), .. siteData.ToArray()];
     }
 
     private static byte[] BuildInternalObjectSite(int siteId, byte typeCode, int objectStreamSize)
@@ -291,6 +296,12 @@ internal static class GeneratedStorageFactory
         MsFormsFactoryBinary.WriteUInt32(output, 0);
         return output.ToArray();
     }
+
+    public static byte[] BuildDefaultPageTail() =>
+        Convert.FromHexString("00020C0019000000F3FF0100FF010000");
+
+    private static byte[] BuildDefaultMultiPageTail() =>
+        Convert.FromHexString("00020C0019000000F08F0000FF010000");
 
     private static byte[] BuildInternalTabStripPayload(IReadOnlyList<string> pageNames, IReadOnlyList<string> pageCaptions, int width, int height)
     {

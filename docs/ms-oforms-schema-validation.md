@@ -98,3 +98,15 @@ Latest create-from-zero acceptance:
 - generated-from-zero raw parser diagnostics: `legacyScannerCount: 0`, `warningCount: 0`, `errorCount: 0`.
 - generated `MultiNuevo` has `multiPageXStreamValidation: exact` and pages `PageUno`/`PageDos`.
 - strict raw output includes root storage CLSID plus `CompObj`, and owned storage CLSID plus `CompObj` for generated `Frame`, `MultiPage`, and `Page` storages.
+
+Latest torture regression:
+
+- `examples/create-torture-stage1.patch.json` creates root controls plus empty generated containers.
+- `examples/create-torture-stage2.patch.json` fills first-level generated containers after re-inspection.
+- `examples/create-torture-stage3.patch.json` fills deeper generated containers and generated pages.
+- Final `out/CreateTorture.frm`: strict validate detects 42 controls, with `semanticMatch: true` in stage reports.
+- Generated Frames that receive children strict-inspect with `formPropMask: 0x0C1A0C48`, populated `nextAvailableId`, and `shapeCookie: 1`, matching the native Frame-with-children baseline instead of the native empty-Frame baseline.
+- Generated Pages that receive children now append the native Page tail `00020C0019000000F3FF0100FF010000`; all populated Page storages in `CreateTorture` end with this tail.
+- Generated MultiPage storages now append the native MultiPage tail `00020C0019000000F08F0000FF010000`; this matches `CreateTortureEditado`/native MultiPage `f` streams.
+- Standalone `TabStrip` acceptance: `out/CreateTabStripDemo.frm` strict-validates with 10 controls; `TsSections` has captions `Alpha|Beta|Gamma`, names `TabAlpha|TabBeta|TabGamma`, and all tab flags `0x00000003`.
+- `TabStrip` is a selector, not a child-control container. The demo uses sibling Frame panels plus VBA `TsSections_Change` to switch visibility.

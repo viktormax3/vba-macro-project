@@ -37,6 +37,12 @@
 - `frxedit create` now generates a `.frm/.frx` pair from zero with a strict-parseable empty UserForm, and can immediately apply a full-patch add document.
 - Built-in `CompObj` baselines are available for Form/Page, Frame, and MultiPage so generated containers no longer depend on source fixture CompObj streams.
 - Strict validation now checks root/container storage CLSIDs and required `CompObj` streams, catching OLE storage defects that can pass parser-only validation but fail in the native designer.
+- Empty native-style Frame storages now omit internal `FormSiteData` until the first child is added; the rebuilder can append the first child `FormSiteData` block later.
+- When an empty generated Frame receives its first child, the rebuilder now promotes its `FormControl` to the native child-bearing Frame shape (`0x0C1A0C48`, `nextAvailableId`, `shapeCookie`) and removes the empty-frame font padding before `FormSiteData`.
+- When an empty generated Page receives its first child, the rebuilder now appends the native 16-byte Page tail after `FormSiteData`, matching native MultiPage pages that contain controls.
+- Generated MultiPage `f` streams now include the native MultiPage tail after FormSiteData (`00020C0019000000F08F0000FF010000`), separate from the Page tail.
+- Added `CreateTabStripDemo` regression fixtures showing the correct standalone `TabStrip` usage: tabs select normal sibling `Frame` panels through VBA `TabStrip_Change`; `TabStrip` is not a storage/container owner.
+- Added a multi-stage `CreateTorture` regression that builds a 42-control form with root controls, nested frames, multipages, pages, and controls inside generated containers.
 - The previous `ObjectStreamRoundTripRewriter` build warnings have been resolved; current build is clean.
 - Added `MsFormsControlSchemaCatalog` as the internal checklist for spec section, parser, masks, TextProps, site flags, and factory readiness per control type.
 - Added `docs/ms-oforms-schema-validation.md` with the strict-inspect baseline for all common controls in `userformallcontrol`.
@@ -61,8 +67,9 @@
 ## Next Targets
 
 1. Implement `Page` reorder under existing `MultiPage`, keeping `x`, inner TabStrip, internal sites, and page storages synchronized.
-2. Run import validation in Corel and Office/VBA for generated-from-zero forms after the strict OLE storage checks.
-3. Add binary picture payload support for `Image` and picture-capable controls as the final feature layer.
+2. Add strict validation that rejects common controls using `TabStrip` as `parent`; use sibling panels plus VBA or use `MultiPage` for real per-page containers.
+3. Run import validation in Corel and Office/VBA for generated-from-zero forms after the strict OLE storage checks.
+4. Add binary picture payload support for `Image` and picture-capable controls as the final feature layer.
 
 ## Working Rule
 

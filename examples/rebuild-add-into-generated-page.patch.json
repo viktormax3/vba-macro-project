@@ -3,7 +3,7 @@
     {
       "type": "TextBox",
       "name": "TxtInsideGeneratedPage",
-      "parent": "PageGenerated",
+      "parent": "MpGenPage1",
       "leftPt": 12,
       "topPt": 18,
       "widthPt": 90,

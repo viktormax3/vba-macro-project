@@ -872,6 +872,11 @@ internal static class ObjectStreamRoundTripRewriter
             PatchSiteDataCountOfSites(rebuilt, referenceControl, countDelta, formStream.Path);
         }
 
+        PatchNextAvailableId(rebuilt, allOriginalSlices
+            .Where(slice => !slice.IsRemoval)
+            .Select(slice => slice.Control)
+            .Concat(additions.Select(addition => addition.Control)));
+
         return rebuilt;
     }
 
@@ -914,10 +919,14 @@ internal static class ObjectStreamRoundTripRewriter
             }
         }
 
+        var appendSiteData = false;
         if (countOfSites != 0 || countOfBytes != 0)
         {
-            return null;
+            appendSiteData = true;
+            hasClassInfoCount = false;
         }
+
+        var appendPageTail = IsEmptyGeneratedPageFormStream(data, siteDataOffset, countOfSites, countOfBytes);
 
         using var payload = new MemoryStream();
         var depthBytes = SerializeSiteDepthsAndTypes(additions.Select(addition => addition.Control).ToList(), formStream.Path);
@@ -934,7 +943,16 @@ internal static class ObjectStreamRoundTripRewriter
         }
 
         using var output = new MemoryStream();
-        output.Write(data, 0, siteDataOffset);
+        if (appendSiteData &&
+            TryPromoteEmptyFrameFormControl(data, additions.Select(addition => addition.Control), out var promotedFramePrefix))
+        {
+            output.Write(promotedFramePrefix);
+        }
+        else
+        {
+            output.Write(data, 0, appendSiteData ? data.Length : siteDataOffset);
+        }
+
         if (hasClassInfoCount)
         {
             MsFormsFactoryBinary.WriteUInt16(output, 0);
@@ -943,7 +961,293 @@ internal static class ObjectStreamRoundTripRewriter
         MsFormsFactoryBinary.WriteUInt32(output, checked((uint)additions.Count));
         MsFormsFactoryBinary.WriteUInt32(output, checked((uint)payload.Length));
         output.Write(payload.ToArray());
-        return output.ToArray();
+        if (appendPageTail)
+        {
+            output.Write(BuildDefaultPageTail());
+        }
+
+        var rebuilt = output.ToArray();
+        PatchNextAvailableId(rebuilt, additions.Select(addition => addition.Control));
+        return rebuilt;
+    }
+
+    private static bool IsEmptyGeneratedPageFormStream(byte[] data, int siteDataOffset, uint countOfSites, uint countOfBytes)
+    {
+        if (countOfSites != 0 || countOfBytes != 0 || data.Length != siteDataOffset + 8)
+        {
+            return false;
+        }
+
+        if (data.Length < 12 || data[0] != 0 || data[1] != 4)
+        {
+            return false;
+        }
+
+        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4));
+        return propMask == 0x0C00_0C48;
+    }
+
+    private static byte[] BuildDefaultPageTail() =>
+        // Native Pages with child controls persist this 16-byte PageControl tail after
+        // FormSiteData. Without it, the page parses internally but the native designer
+        // opens the MultiPage tab as visually empty.
+        Convert.FromHexString("00020C0019000000F3FF0100FF010000");
+
+    private static bool TryPromoteEmptyFrameFormControl(
+        byte[] data,
+        IEnumerable<ControlInfo> additions,
+        out byte[] promotedPrefix)
+    {
+        promotedPrefix = [];
+        if (data.Length < 16 || data[0] != 0 || data[1] != 4)
+        {
+            return false;
+        }
+
+        var cbForm = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
+        var formEnd = 4 + cbForm;
+        if (formEnd > data.Length)
+        {
+            return false;
+        }
+
+        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4));
+        if (propMask != 0x081A_0C40)
+        {
+            return false;
+        }
+
+        if (!TryFindFrameDrawBufferLocalOffset(data, out var drawBufferOffset) ||
+            drawBufferOffset < 8 ||
+            drawBufferOffset > formEnd)
+        {
+            return false;
+        }
+
+        var copyEnd = TrimTrailingZeroFontPadding(data);
+        if (copyEnd < formEnd)
+        {
+            return false;
+        }
+
+        var nextAvailableId = additions
+            .Select(control => control.Properties is not null && TryGetInt(control.Properties, "siteId", out var siteId)
+                ? siteId
+                : control.Properties is not null && TryGetInt(control.Properties, "id", out var id)
+                    ? id
+                    : 0)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+
+        using var output = new MemoryStream();
+        output.Write(data, 0, 2);
+        MsFormsFactoryBinary.WriteUInt16(output, checked((ushort)(cbForm + 8)));
+        MsFormsFactoryBinary.WriteUInt32(output, 0x0C1A_0C48);
+        MsFormsFactoryBinary.WriteUInt32(output, checked((uint)Math.Max(nextAvailableId, 1)));
+        output.Write(data, 8, drawBufferOffset - 8);
+        MsFormsFactoryBinary.WriteUInt32(output, 1);
+        output.Write(data, drawBufferOffset, copyEnd - drawBufferOffset);
+        promotedPrefix = output.ToArray();
+        return true;
+    }
+
+    private static int TrimTrailingZeroFontPadding(byte[] data)
+    {
+        // Native empty Frame streams persist eight trailing zero bytes after the default
+        // StdFont stream. Once the first child is added, the designer writes FormSiteData
+        // immediately after the font name instead; leaving those zero bytes makes native
+        // importers read CountOfSites as zero and the Frame opens visually empty.
+        return data.Length >= 8 && data.AsSpan(data.Length - 8, 8).SequenceEqual(stackalloc byte[8])
+            ? data.Length - 8
+            : data.Length;
+    }
+
+    private static bool TryFindFrameDrawBufferLocalOffset(byte[] formStream, out int offset)
+    {
+        offset = 0;
+        var cbForm = BinaryPrimitives.ReadUInt16LittleEndian(formStream.AsSpan(2, 2));
+        var blockEnd = 4 + cbForm;
+        if (blockEnd > formStream.Length)
+        {
+            return false;
+        }
+
+        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(formStream.AsSpan(4, 4));
+        var cursor = 8;
+        if (MsFormsBinary.HasBit(propMask, 1))
+        {
+            cursor = AlignTo(cursor, 4) + 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 2))
+        {
+            cursor = AlignTo(cursor, 4) + 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 3))
+        {
+            cursor = AlignTo(cursor, 4) + 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 6))
+        {
+            cursor = AlignTo(cursor, 4) + 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 7))
+        {
+            cursor++;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 8))
+        {
+            cursor++;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 9))
+        {
+            cursor++;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (MsFormsBinary.HasBit(propMask, 13))
+        {
+            cursor += 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 15))
+        {
+            cursor = AlignTo(cursor, 2) + 2;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 16))
+        {
+            cursor++;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 17))
+        {
+            cursor++;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (MsFormsBinary.HasBit(propMask, 18))
+        {
+            cursor += 4;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (MsFormsBinary.HasBit(propMask, 19))
+        {
+            cursor += 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 20))
+        {
+            cursor = AlignTo(cursor, 2) + 2;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 21))
+        {
+            cursor = AlignTo(cursor, 2) + 2;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (MsFormsBinary.HasBit(propMask, 22))
+        {
+            cursor += 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 23))
+        {
+            cursor++;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 25))
+        {
+            cursor++;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (MsFormsBinary.HasBit(propMask, 26))
+        {
+            cursor += 4;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (!MsFormsBinary.HasBit(propMask, 27) || cursor + 4 > blockEnd)
+        {
+            return false;
+        }
+
+        offset = cursor;
+        return true;
+    }
+
+    private static void PatchNextAvailableId(byte[] formStream, IEnumerable<ControlInfo> controls)
+    {
+        var maxId = controls
+            .Select(control => control.Properties is not null && TryGetInt(control.Properties, "siteId", out var siteId)
+                ? siteId
+                : control.Properties is not null && TryGetInt(control.Properties, "id", out var id)
+                    ? id
+                    : 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        if (maxId <= 0 || !TryFindNextAvailableIdLocalOffset(formStream, out var offset))
+        {
+            return;
+        }
+
+        BinaryPrimitives.WriteUInt32LittleEndian(formStream.AsSpan(offset, 4), checked((uint)(maxId + 1)));
+    }
+
+    private static bool TryFindNextAvailableIdLocalOffset(byte[] formStream, out int offset)
+    {
+        offset = 0;
+        if (formStream.Length < 12 || formStream[0] != 0 || formStream[1] != 4)
+        {
+            return false;
+        }
+
+        var cbForm = BinaryPrimitives.ReadUInt16LittleEndian(formStream.AsSpan(2, 2));
+        var blockEnd = 4 + cbForm;
+        if (blockEnd > formStream.Length)
+        {
+            return false;
+        }
+
+        var propMask = BinaryPrimitives.ReadUInt32LittleEndian(formStream.AsSpan(4, 4));
+        var cursor = 8;
+        if (MsFormsBinary.HasBit(propMask, 1))
+        {
+            cursor = AlignTo(cursor, 4) + 4;
+        }
+
+        if (MsFormsBinary.HasBit(propMask, 2))
+        {
+            cursor = AlignTo(cursor, 4) + 4;
+        }
+
+        if (!MsFormsBinary.HasBit(propMask, 3))
+        {
+            return false;
+        }
+
+        cursor = AlignTo(cursor, 4);
+        if (cursor + 4 > blockEnd)
+        {
+            return false;
+        }
+
+        offset = cursor;
+        return true;
+    }
+
+    private static int AlignTo(int value, int alignment)
+    {
+        var remainder = value % alignment;
+        return remainder == 0 ? value : value + alignment - remainder;
     }
 
 
