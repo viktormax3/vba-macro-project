@@ -5,6 +5,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     public int Run(string[] args)
@@ -63,8 +64,16 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             layout.Controls,
             layout.FrxFormControl,
             layout.ParserValidation);
-        var humanDocument = HumanLayoutDocument.FromRaw(rawDocument);
-        WriteJson(parsed.GetOption("out"), humanDocument);
+        if (parsed.GetOption("as-patch") is not null)
+        {
+            var patchDocument = FrxEdit.Cli.MsForms.Model.PatchDocumentGenerator.FromRaw(layout, project.FormName);
+            WriteJson(parsed.GetOption("out"), patchDocument);
+        }
+        else
+        {
+            var humanDocument = HumanLayoutDocument.FromRaw(rawDocument);
+            WriteJson(parsed.GetOption("out"), humanDocument);
+        }
 
         if (parsed.GetOption("raw-out") is { } rawOut)
         {

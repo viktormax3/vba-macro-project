@@ -37,10 +37,15 @@ if "%OUT%"=="" (
 )
 
 for %%I in ("%OUT%") do set "RAW_OUT=%%~dpnI.raw.json"
+for %%I in ("%OUT%") do set "PATCH_OUT=%%~dpnI.patch.json"
 
 pushd "%SCRIPT_DIR%" >nul
 dotnet run --project "src\FrxEdit.Cli\FrxEdit.Cli.csproj" -- inspect "%FORM%" --mode strict --out "%OUT%" --raw-out "%RAW_OUT%"
 set "EXIT_CODE=%ERRORLEVEL%"
+if %EXIT_CODE% EQU 0 (
+    dotnet run --project "src\FrxEdit.Cli\FrxEdit.Cli.csproj" -- inspect "%FORM%" --mode strict --out "%PATCH_OUT%" --as-patch
+    set "EXIT_CODE=%ERRORLEVEL%"
+)
 popd >nul
 
 exit /b %EXIT_CODE%

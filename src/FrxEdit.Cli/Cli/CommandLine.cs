@@ -1,4 +1,4 @@
-﻿internal sealed class CommandLine
+internal sealed class CommandLine
 {
     public required List<string> Positionals { get; init; }
     public required Dictionary<string, string> Options { get; init; }
@@ -25,10 +25,12 @@
 
             if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
-                throw new CliException($"Option '--{key}' requires a value.");
+                options[key] = "true";
             }
-
-            options[key] = args[++i];
+            else
+            {
+                options[key] = args[++i];
+            }
         }
 
         if (positionals.Count < minPositionals || positionals.Count > maxPositionals)
