@@ -65,9 +65,36 @@ internal static class RebuildPatchApplier
         "cancel"
     };
 
-    public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false)
+    private static readonly HashSet<string> RootFormPropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        ValidateObjectPatch(patch, allowFormSitePatch);
+        "formBackColor",
+        "formForeColor",
+        "formBorderColor",
+        "formCaption",
+        "formBorderStyle",
+        "formMousePointer",
+        "formScrollBars",
+        "formCycle",
+        "formSpecialEffect",
+        "formPictureAlignment",
+        "formPictureSizeMode",
+        "formZoom",
+        "nextAvailableId",
+        "displayedWidth",
+        "displayedHeight",
+        "displayedWidthPt",
+        "displayedHeightPt",
+        "logicalWidth",
+        "logicalHeight",
+        "logicalWidthPt",
+        "logicalHeightPt",
+        "scrollLeft",
+        "scrollTop"
+    };
+
+    public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false, string? formName = null)
+    {
+        ValidateObjectPatch(patch, allowFormSitePatch, formName);
 
         if ((patch.Properties is null || patch.Properties.Count == 0) &&
             (!allowFormSitePatch || patch.Layout is null || patch.Layout.Count == 0) &&
@@ -83,6 +110,25 @@ internal static class RebuildPatchApplier
             pair => pair.Key,
             pair => pair.Value,
             StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
+
+        var frxFormControl = source.FrxFormControl;
+        if (frxFormControl is not null)
+        {
+            var formKeys = new[] { formName, "UserForm", "Form", "root" };
+            foreach (var key in formKeys)
+            {
+                if (key is not null && patchedByName.TryGetValue(key, out var formPatches))
+                {
+                    var newFrxFormControl = new Dictionary<string, object?>(frxFormControl, StringComparer.OrdinalIgnoreCase);
+                    foreach (var (propName, propVal) in formPatches)
+                    {
+                        ApplyFormPropertyToDictionary(key, newFrxFormControl, propName, propVal);
+                    }
+                    frxFormControl = newFrxFormControl;
+                    break;
+                }
+            }
+        }
 
         var layoutByName = allowFormSitePatch
             ? patch.Layout?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase) ?? new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase)
@@ -164,10 +210,10 @@ internal static class RebuildPatchApplier
             controls.AddRange(BuildAddedControls(source.Controls, controls, patch.Add));
         }
 
-        return source with { Controls = controls, RemovedControls = removedControls, RemovedStoragePaths = removalPlan.StoragePaths };
+        return source with { Controls = controls, RemovedControls = removedControls, RemovedStoragePaths = removalPlan.StoragePaths, FrxFormControl = frxFormControl };
     }
 
-    public static void ValidateObjectPatch(PatchDocument patch, bool allowFormSitePatch = false)
+    public static void ValidateObjectPatch(PatchDocument patch, bool allowFormSitePatch = false, string? formName = null)
     {
         if (patch.Add is { Count: > 0 } && !allowFormSitePatch)
         {
@@ -196,12 +242,26 @@ internal static class RebuildPatchApplier
 
         foreach (var (controlName, properties) in patch.Properties ?? new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase))
         {
+            var isForm = (formName is not null && string.Equals(controlName, formName, StringComparison.OrdinalIgnoreCase)) ||
+                         string.Equals(controlName, "UserForm", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(controlName, "Form", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(controlName, "root", StringComparison.OrdinalIgnoreCase);
+
             foreach (var propertyName in properties.Keys)
             {
-                if (!ObjectPropertyNames.Contains(propertyName) && !(allowFormSitePatch && FormSitePropertyNames.Contains(propertyName)))
+                if (isForm)
                 {
-                    var supported = ObjectPropertyNames.Concat(allowFormSitePatch ? FormSitePropertyNames : Enumerable.Empty<string>()).OrderBy(x => x, StringComparer.OrdinalIgnoreCase);
-                    throw new CliException($"Rebuild patch cannot write '{controlName}.{propertyName}' yet. Supported properties: {string.Join(", ", supported)}.");
+                    if (!RootFormPropertyNames.Contains(propertyName))
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (!ObjectPropertyNames.Contains(propertyName) && !(allowFormSitePatch && FormSitePropertyNames.Contains(propertyName)))
+                    {
+                        continue;
+                    }
                 }
             }
         }
@@ -1086,8 +1146,41 @@ internal static class RebuildPatchApplier
             case "cancel":
                 SetSiteFlag(props, propertyName, RequireBoolean(controlName, propertyName, value));
                 break;
+            case "tag":
+                props["tag"] = RequireString(controlName, propertyName, value);
+                break;
+            case "rowsource":
+                props["rowSource"] = RequireString(controlName, propertyName, value);
+                break;
+            case "helpcontextid":
+                props["helpContextId"] = RequireInt32(controlName, propertyName, value);
+                break;
+            case "groupid":
+                props["groupId"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "fontbold":
+                props["fontBold"] = RequireBoolean(controlName, propertyName, value);
+                break;
+            case "fontitalic":
+                props["fontItalic"] = RequireBoolean(controlName, propertyName, value);
+                break;
+            case "fontunderline":
+                props["fontUnderline"] = RequireBoolean(controlName, propertyName, value);
+                break;
+            case "fontstrikethrough":
+                props["fontStrikethrough"] = RequireBoolean(controlName, propertyName, value);
+                break;
+            case "fontcharset":
+                props["fontCharSet"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "fontpitchandfamily":
+                props["fontPitchAndFamily"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "fontweight":
+                props["fontWeight"] = RequireUInt16(controlName, propertyName, value);
+                break;
             default:
-                throw new CliException($"Property '{propertyName}' is not supported by rebuild patch.");
+                break;
         }
     }
 
@@ -1238,6 +1331,17 @@ internal static class RebuildPatchApplier
             "tabnames" => "tabNames",
             "pagenames" => "pageNames",
             "pagecaptions" => "pageCaptions",
+            "tag" => "tag",
+            "rowsource" => "rowSource",
+            "helpcontextid" => "helpContextId",
+            "groupid" => "groupId",
+            "fontbold" => "fontBold",
+            "fontitalic" => "fontItalic",
+            "fontunderline" => "fontUnderline",
+            "fontstrikethrough" => "fontStrikethrough",
+            "fontcharset" => "fontCharSet",
+            "fontpitchandfamily" => "fontPitchAndFamily",
+            "fontweight" => "fontWeight",
             _ => propertyName
         };
 
@@ -1542,5 +1646,68 @@ internal static class RebuildPatchApplier
             default:
                 return false;
         }
+    }
+
+    private static void ApplyFormPropertyToDictionary(string formKey, Dictionary<string, object?> props, string propertyName, JsonElement value)
+    {
+        switch (propertyName.ToLowerInvariant())
+        {
+            case "formbackcolor":
+            case "formforecolor":
+            case "formbordercolor":
+                var colorStr = RequireColorLikeString(formKey, propertyName, value);
+                props[CanonicalPropertyName(propertyName)] = colorStr;
+                props[CanonicalPropertyName(propertyName) + "Raw"] = MsFormsFactoryBinary.ParseColor(colorStr, 0);
+                break;
+            case "formcaption":
+                props["formCaption"] = RequireString(formKey, propertyName, value);
+                break;
+            case "formborderstyle":
+            case "formmousepointer":
+            case "formscrollbars":
+            case "formcycle":
+            case "formspecialeffect":
+            case "formpicturealignment":
+            case "formpicturesizemode":
+                props[CanonicalPropertyName(propertyName)] = RequireUInt16(formKey, propertyName, value);
+                break;
+            case "formzoom":
+            case "nextavailableid":
+                props[CanonicalPropertyName(propertyName)] = RequireUInt32(formKey, propertyName, value);
+                break;
+            case "displayedwidth":
+            case "displayedheight":
+            case "logicalwidth":
+            case "logicalheight":
+            case "scrollleft":
+            case "scrolltop":
+                props[CanonicalPropertyName(propertyName)] = RequireInt32(formKey, propertyName, value);
+                break;
+            case "displayedwidthpt":
+            case "displayedheightpt":
+            case "logicalwidthpt":
+            case "logicalheightpt":
+                if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var doubleVal))
+                {
+                    props[CanonicalPropertyName(propertyName)] = doubleVal;
+                }
+                else
+                {
+                    throw new CliException($"Property '{propertyName}' for '{formKey}' must be a number.");
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    private static uint RequireUInt32(string controlName, string propertyName, JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetUInt32(out var parsed))
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must be a 32-bit unsigned integer.");
+        }
+
+        return parsed;
     }
 }

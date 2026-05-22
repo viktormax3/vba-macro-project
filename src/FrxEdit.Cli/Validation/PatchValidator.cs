@@ -1,6 +1,6 @@
-﻿internal static class PatchValidator
+internal static class PatchValidator
 {
-    public static void Validate(PatchDocument patch, IReadOnlyList<ControlInfo> controls)
+    public static void Validate(PatchDocument patch, IReadOnlyList<ControlInfo> controls, string? formName = null)
     {
         var known = controls.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var finalNames = controls.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -65,6 +65,16 @@
 
         foreach (var name in patch.Properties?.Keys ?? Enumerable.Empty<string>())
         {
+            var isForm = (formName is not null && string.Equals(name, formName, StringComparison.OrdinalIgnoreCase)) ||
+                         string.Equals(name, "UserForm", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(name, "Form", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(name, "root", StringComparison.OrdinalIgnoreCase);
+
+            if (isForm)
+            {
+                continue;
+            }
+
             if (removed.Contains(name))
             {
                 throw new CliException($"Properties target '{name}' is removed by this patch.");

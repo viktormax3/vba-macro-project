@@ -117,6 +117,27 @@ internal static class ObjectStreamRoundTripRewriter
                     changed = true;
                 }
 
+                var isRootFormStream = false;
+                if (layout.FrxFormControl is not null &&
+                    TryGetString(layout.FrxFormControl, "storagePath", out var rootStoragePath) &&
+                    !string.IsNullOrWhiteSpace(rootStoragePath) &&
+                    stream.Path.Equals($"{rootStoragePath}/f", StringComparison.OrdinalIgnoreCase))
+                {
+                    isRootFormStream = true;
+                }
+
+                if (isRootFormStream && layout.FrxFormControl is not null)
+                {
+                    if (layout.FrxFormControl.TryGetValue("formCaption", out var captionVal) && captionVal is string captionStr)
+                    {
+                        patched = PatchRootFormCaption(patched, layout.FrxFormControl, captionStr);
+                    }
+
+                    var tempStream = stream with { Data = patched };
+                    PatchRootFormScalars(tempStream, layout.FrxFormControl, patched);
+                    changed = true;
+                }
+
                 if (changed)
                 {
                     return WithNewData(stream, patched);
@@ -1574,6 +1595,16 @@ internal static class ObjectStreamRoundTripRewriter
             WriteUInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, objectSizeFileOffset, newObjectStreamSize, $"{control.Name}.ObjectStreamSize");
         }
 
+        if (TryGetInt(props, "helpContextId", out var helpContextId) && TryGetInt(props, "helpContextIdOffset", out var helpContextIdFileOffset))
+        {
+            WriteUInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, helpContextIdFileOffset, helpContextId, $"{control.Name}.HelpContextID");
+        }
+
+        if (TryGetInt(props, "groupId", out var groupId) && TryGetInt(props, "groupIdOffset", out var groupIdFileOffset))
+        {
+            WriteUInt16ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, groupIdFileOffset, groupId, $"{control.Name}.GroupID");
+        }
+
         var segments = BuildFormSiteStringSegments(control, props, siteStartLocalOffset);
         foreach (var segment in segments
             .OrderByDescending(segment => segment.DataLocalOffset)
@@ -1620,6 +1651,7 @@ internal static class ObjectStreamRoundTripRewriter
         Add("controlTipText");
         Add("controlSource");
         Add("tag");
+        Add("rowSource");
         return result;
     }
 
@@ -2383,6 +2415,247 @@ internal static class ObjectStreamRoundTripRewriter
             default:
                 return false;
         }
+    }
+
+    private const double HimetricPerPoint = 2540.0 / 72.0;
+
+    private static int ToRawPoints(double value) =>
+        checked((int)Math.Round(value * HimetricPerPoint, MidpointRounding.AwayFromZero));
+
+    private static byte[] PatchRootFormCaption(byte[] data, Dictionary<string, object?> props, string newValue)
+    {
+        if (!TryGetStringSpan(props, "formCaption", out var span) || span.CountLocalOffset is null)
+        {
+            return data;
+        }
+
+        var countLocalOffset = span.CountLocalOffset.Value;
+        var dataLocalOffset = span.DataLocalOffset;
+        var byteCount = span.ByteCount;
+        var paddedByteCount = span.PaddedByteCount;
+        var compressed = span.Compressed;
+
+        if (countLocalOffset < 0 || countLocalOffset + 4 > data.Length)
+        {
+            throw new CliException("Cannot rebuild form caption: count offset is outside the stream.");
+        }
+
+        if (dataLocalOffset < 0 || dataLocalOffset + paddedByteCount > data.Length)
+        {
+            throw new CliException("Cannot rebuild form caption: data offset is outside the stream.");
+        }
+
+        var encoded = compressed
+            ? Encoding.Latin1.GetBytes(newValue)
+            : Encoding.Unicode.GetBytes(newValue);
+
+        var newPaddedByteCount = Align4(encoded.Length);
+        var count = (uint)encoded.Length;
+        if (compressed)
+        {
+            count |= 0x8000_0000u;
+        }
+
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(countLocalOffset, 4), count);
+
+        if (newPaddedByteCount == paddedByteCount)
+        {
+            data.AsSpan(dataLocalOffset, paddedByteCount).Clear();
+            encoded.CopyTo(data.AsSpan(dataLocalOffset));
+            return data;
+        }
+
+        var delta = newPaddedByteCount - paddedByteCount;
+        var currentCbForm = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(2, 2));
+        var nextCbForm = checked(currentCbForm + delta);
+        if (nextCbForm < 0 || nextCbForm > ushort.MaxValue)
+        {
+            throw new CliException("Cannot rebuild form caption: cbForm would overflow or be negative.");
+        }
+
+        using var output = new MemoryStream(data.Length + delta);
+        output.Write(data, 0, dataLocalOffset);
+        output.Write(encoded, 0, encoded.Length);
+        if (newPaddedByteCount > encoded.Length)
+        {
+            output.Write(new byte[newPaddedByteCount - encoded.Length]);
+        }
+        var oldTailStart = dataLocalOffset + paddedByteCount;
+        output.Write(data, oldTailStart, data.Length - oldTailStart);
+
+        var rebuilt = output.ToArray();
+        BinaryPrimitives.WriteUInt16LittleEndian(rebuilt.AsSpan(2, 2), (ushort)nextCbForm);
+        return rebuilt;
+    }
+
+    private static void PatchRootFormScalars(StorageEntryDump formStream, Dictionary<string, object?> props, byte[] output)
+    {
+        if (props.TryGetValue("formBackColor", out var backColorVal) && backColorVal is string backColorStr &&
+            TryGetInt(props, "formBackColorRawOffset", out var backColorOffset))
+        {
+            var rawColor = MsFormsFactoryBinary.ParseColor(backColorStr, 0);
+            WriteUInt32ByFileOffset(formStream, output, backColorOffset, rawColor, "formBackColor");
+        }
+
+        if (props.TryGetValue("formForeColor", out var foreColorVal) && foreColorVal is string foreColorStr &&
+            TryGetInt(props, "formForeColorRawOffset", out var foreColorOffset))
+        {
+            var rawColor = MsFormsFactoryBinary.ParseColor(foreColorStr, 0);
+            WriteUInt32ByFileOffset(formStream, output, foreColorOffset, rawColor, "formForeColor");
+        }
+
+        if (props.TryGetValue("formBorderColor", out var borderColorVal) && borderColorVal is string borderColorStr &&
+            TryGetInt(props, "formBorderColorRawOffset", out var borderColorOffset))
+        {
+            var rawColor = MsFormsFactoryBinary.ParseColor(borderColorStr, 0);
+            WriteUInt32ByFileOffset(formStream, output, borderColorOffset, rawColor, "formBorderColor");
+        }
+
+        if (TryGetInt(props, "nextAvailableId", out var nextAvailableId) &&
+            TryGetInt(props, "nextAvailableIdOffset", out var nextAvailableIdOffset))
+        {
+            WriteUInt32ByFileOffset(formStream, output, nextAvailableIdOffset, (uint)nextAvailableId, "nextAvailableId");
+        }
+
+        if (TryGetInt(props, "formBorderStyle", out var formBorderStyle) &&
+            TryGetInt(props, "formBorderStyleOffset", out var formBorderStyleOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formBorderStyleOffset, (byte)formBorderStyle, "formBorderStyle");
+        }
+
+        if (TryGetInt(props, "formMousePointer", out var formMousePointer) &&
+            TryGetInt(props, "formMousePointerOffset", out var formMousePointerOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formMousePointerOffset, (byte)formMousePointer, "formMousePointer");
+        }
+
+        if (TryGetInt(props, "formScrollBars", out var formScrollBars) &&
+            TryGetInt(props, "formScrollBarsOffset", out var formScrollBarsOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formScrollBarsOffset, (byte)formScrollBars, "formScrollBars");
+        }
+
+        if (TryGetInt(props, "formCycle", out var formCycle) &&
+            TryGetInt(props, "formCycleOffset", out var formCycleOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formCycleOffset, (byte)formCycle, "formCycle");
+        }
+
+        if (TryGetInt(props, "formSpecialEffect", out var formSpecialEffect) &&
+            TryGetInt(props, "formSpecialEffectOffset", out var formSpecialEffectOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formSpecialEffectOffset, (byte)formSpecialEffect, "formSpecialEffect");
+        }
+
+        if (TryGetInt(props, "formZoom", out var formZoom) &&
+            TryGetInt(props, "formZoomOffset", out var formZoomOffset))
+        {
+            WriteUInt32ByFileOffset(formStream, output, formZoomOffset, (uint)formZoom, "formZoom");
+        }
+
+        if (TryGetInt(props, "formPictureAlignment", out var formPictureAlignment) &&
+            TryGetInt(props, "formPictureAlignmentOffset", out var formPictureAlignmentOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formPictureAlignmentOffset, (byte)formPictureAlignment, "formPictureAlignment");
+        }
+
+        if (TryGetInt(props, "formPictureSizeMode", out var formPictureSizeMode) &&
+            TryGetInt(props, "formPictureSizeModeOffset", out var formPictureSizeModeOffset))
+        {
+            WriteByteByFileOffset(formStream, output, formPictureSizeModeOffset, (byte)formPictureSizeMode, "formPictureSizeMode");
+        }
+
+        if (props.TryGetValue("displayedWidthPt", out var displayedWidthPtVal) && displayedWidthPtVal is not null)
+        {
+            var valPt = Convert.ToDouble(displayedWidthPtVal);
+            var valRaw = ToRawPoints(valPt);
+            if (TryGetInt(props, "displayedWidthOffset", out var displayedWidthOffset))
+            {
+                WriteInt32ByFileOffset(formStream, output, displayedWidthOffset, valRaw, "displayedWidth");
+            }
+        }
+        else if (TryGetInt(props, "displayedWidth", out var displayedWidth) &&
+                 TryGetInt(props, "displayedWidthOffset", out var displayedWidthOffset))
+        {
+            WriteInt32ByFileOffset(formStream, output, displayedWidthOffset, displayedWidth, "displayedWidth");
+        }
+
+        if (props.TryGetValue("displayedHeightPt", out var displayedHeightPtVal) && displayedHeightPtVal is not null)
+        {
+            var valPt = Convert.ToDouble(displayedHeightPtVal);
+            var valRaw = ToRawPoints(valPt);
+            if (TryGetInt(props, "displayedHeightOffset", out var displayedHeightOffset))
+            {
+                WriteInt32ByFileOffset(formStream, output, displayedHeightOffset, valRaw, "displayedHeight");
+            }
+        }
+        else if (TryGetInt(props, "displayedHeight", out var displayedHeight) &&
+                 TryGetInt(props, "displayedHeightOffset", out var displayedHeightOffset))
+        {
+            WriteInt32ByFileOffset(formStream, output, displayedHeightOffset, displayedHeight, "displayedHeight");
+        }
+
+        if (props.TryGetValue("logicalWidthPt", out var logicalWidthPtVal) && logicalWidthPtVal is not null)
+        {
+            var valPt = Convert.ToDouble(logicalWidthPtVal);
+            var valRaw = ToRawPoints(valPt);
+            if (TryGetInt(props, "logicalWidthOffset", out var logicalWidthOffset))
+            {
+                WriteInt32ByFileOffset(formStream, output, logicalWidthOffset, valRaw, "logicalWidth");
+            }
+        }
+        else if (TryGetInt(props, "logicalWidth", out var logicalWidth) &&
+                 TryGetInt(props, "logicalWidthOffset", out var logicalWidthOffset))
+        {
+            WriteInt32ByFileOffset(formStream, output, logicalWidthOffset, logicalWidth, "logicalWidth");
+        }
+
+        if (props.TryGetValue("logicalHeightPt", out var logicalHeightPtVal) && logicalHeightPtVal is not null)
+        {
+            var valPt = Convert.ToDouble(logicalHeightPtVal);
+            var valRaw = ToRawPoints(valPt);
+            if (TryGetInt(props, "logicalHeightOffset", out var logicalHeightOffset))
+            {
+                WriteInt32ByFileOffset(formStream, output, logicalHeightOffset, valRaw, "logicalHeight");
+            }
+        }
+        else if (TryGetInt(props, "logicalHeight", out var logicalHeight) &&
+                 TryGetInt(props, "logicalHeightOffset", out var logicalHeightOffset))
+        {
+            WriteInt32ByFileOffset(formStream, output, logicalHeightOffset, logicalHeight, "logicalHeight");
+        }
+
+        if (TryGetInt(props, "scrollLeft", out var scrollLeft) &&
+            TryGetInt(props, "scrollLeftOffset", out var scrollLeftOffset))
+        {
+            WriteInt32ByFileOffset(formStream, output, scrollLeftOffset, scrollLeft, "scrollLeft");
+        }
+
+        if (TryGetInt(props, "scrollTop", out var scrollTop) &&
+            TryGetInt(props, "scrollTopOffset", out var scrollTopOffset))
+        {
+            WriteInt32ByFileOffset(formStream, output, scrollTopOffset, scrollTop, "scrollTop");
+        }
+    }
+
+    private static void WriteUInt32ByFileOffset(StorageEntryDump stream, byte[] output, int fileOffset, uint value, string context)
+    {
+        if (!TryMapFileOffsetToLocal(stream.FileOffsets, fileOffset, out var localOffset) || localOffset < 0 || localOffset + 4 > output.Length)
+        {
+            throw new CliException($"Cannot patch {context} in '{stream.Path}': file offset {fileOffset} is not part of the form stream.");
+        }
+
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(localOffset, 4), value);
+    }
+
+    private static void WriteByteByFileOffset(StorageEntryDump stream, byte[] output, int fileOffset, byte value, string context)
+    {
+        if (!TryMapFileOffsetToLocal(stream.FileOffsets, fileOffset, out var localOffset) || localOffset < 0 || localOffset >= output.Length)
+        {
+            throw new CliException($"Cannot patch {context} in '{stream.Path}': file offset {fileOffset} is not part of the form stream.");
+        }
+
+        output[localOffset] = value;
     }
 
     private readonly record struct FormStringSpanInfo(

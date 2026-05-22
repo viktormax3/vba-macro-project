@@ -211,6 +211,13 @@ internal static class ObjectPayloadSerializer
         if (props.TryGetValue("fontSize", out var fontSize) && fontSize is not null) textPropValues["fontSize"] = fontSize;
         if (props.TryGetValue("paragraphAlign", out var commandParagraphAlign) && commandParagraphAlign is not null) textPropValues["paragraphAlign"] = commandParagraphAlign;
         if (props.TryGetValue("textAlign", out var commandTextAlign) && commandTextAlign is not null) textPropValues["textAlign"] = commandTextAlign;
+        if (props.TryGetValue("fontBold", out var fontBold) && fontBold is not null) textPropValues["fontBold"] = fontBold;
+        if (props.TryGetValue("fontItalic", out var fontItalic) && fontItalic is not null) textPropValues["fontItalic"] = fontItalic;
+        if (props.TryGetValue("fontUnderline", out var fontUnderline) && fontUnderline is not null) textPropValues["fontUnderline"] = fontUnderline;
+        if (props.TryGetValue("fontStrikethrough", out var fontStrikethrough) && fontStrikethrough is not null) textPropValues["fontStrikethrough"] = fontStrikethrough;
+        if (props.TryGetValue("fontCharSet", out var fontCharSet) && fontCharSet is not null) textPropValues["fontCharSet"] = fontCharSet;
+        if (props.TryGetValue("fontPitchAndFamily", out var fontPitchAndFamily) && fontPitchAndFamily is not null) textPropValues["fontPitchAndFamily"] = fontPitchAndFamily;
+        if (props.TryGetValue("fontWeight", out var fontWeight) && fontWeight is not null) textPropValues["fontWeight"] = fontWeight;
         var textProps = TextPropsFactory.Build(textPropValues, TextPropsFactory.CommandButtonMask);
 
         const uint defaultForeColor = 0x8000_0012;
@@ -325,6 +332,13 @@ internal static class ObjectPayloadSerializer
         if (props.TryGetValue("fontSize", out var fontSize) && fontSize is not null) textPropValues["fontSize"] = fontSize;
         if (props.TryGetValue("paragraphAlign", out var paragraphAlign) && paragraphAlign is not null) textPropValues["paragraphAlign"] = paragraphAlign;
         if (props.TryGetValue("textAlign", out var textAlign) && textAlign is not null) textPropValues["textAlign"] = textAlign;
+        if (props.TryGetValue("fontBold", out var fontBold) && fontBold is not null) textPropValues["fontBold"] = fontBold;
+        if (props.TryGetValue("fontItalic", out var fontItalic) && fontItalic is not null) textPropValues["fontItalic"] = fontItalic;
+        if (props.TryGetValue("fontUnderline", out var fontUnderline) && fontUnderline is not null) textPropValues["fontUnderline"] = fontUnderline;
+        if (props.TryGetValue("fontStrikethrough", out var fontStrikethrough) && fontStrikethrough is not null) textPropValues["fontStrikethrough"] = fontStrikethrough;
+        if (props.TryGetValue("fontCharSet", out var fontCharSet) && fontCharSet is not null) textPropValues["fontCharSet"] = fontCharSet;
+        if (props.TryGetValue("fontPitchAndFamily", out var fontPitchAndFamily) && fontPitchAndFamily is not null) textPropValues["fontPitchAndFamily"] = fontPitchAndFamily;
+        if (props.TryGetValue("fontWeight", out var fontWeight) && fontWeight is not null) textPropValues["fontWeight"] = fontWeight;
         var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, textPropValues);
         var textProps = TextPropsFactory.Build(textPropValues, textPropsMask);
 
@@ -516,6 +530,13 @@ internal static class ObjectPayloadSerializer
         if (props.TryGetValue("fontSize", out var fontSize) && fontSize is not null) textPropValues["fontSize"] = fontSize;
         if (props.TryGetValue("paragraphAlign", out var paragraphAlign) && paragraphAlign is not null) textPropValues["paragraphAlign"] = paragraphAlign;
         if (props.TryGetValue("textAlign", out var textAlign) && textAlign is not null) textPropValues["textAlign"] = textAlign;
+        if (props.TryGetValue("fontBold", out var fontBold) && fontBold is not null) textPropValues["fontBold"] = fontBold;
+        if (props.TryGetValue("fontItalic", out var fontItalic) && fontItalic is not null) textPropValues["fontItalic"] = fontItalic;
+        if (props.TryGetValue("fontUnderline", out var fontUnderline) && fontUnderline is not null) textPropValues["fontUnderline"] = fontUnderline;
+        if (props.TryGetValue("fontStrikethrough", out var fontStrikethrough) && fontStrikethrough is not null) textPropValues["fontStrikethrough"] = fontStrikethrough;
+        if (props.TryGetValue("fontCharSet", out var fontCharSet) && fontCharSet is not null) textPropValues["fontCharSet"] = fontCharSet;
+        if (props.TryGetValue("fontPitchAndFamily", out var fontPitchAndFamily) && fontPitchAndFamily is not null) textPropValues["fontPitchAndFamily"] = fontPitchAndFamily;
+        if (props.TryGetValue("fontWeight", out var fontWeight) && fontWeight is not null) textPropValues["fontWeight"] = fontWeight;
         var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, textPropValues);
         var textProps = TextPropsFactory.Build(textPropValues, textPropsMask);
 

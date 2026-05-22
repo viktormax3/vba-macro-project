@@ -1,4 +1,4 @@
-﻿internal sealed class UserFormProject
+internal sealed class UserFormProject
 {
     private static readonly Regex OleObjectBlobRegex = new(
         "OleObjectBlob\\s*=\\s*\"(?<frx>[^\"]+)\":(?<offset>[0-9A-Fa-f]+)",
@@ -205,5 +205,107 @@
         }
 
         return result;
+    }
+
+    public static string SynchronizeFormProperties(string frmText, Dictionary<string, object?>? frxFormControl)
+    {
+        if (frxFormControl is null)
+        {
+            return frmText;
+        }
+
+        var beginMatch = Regex.Match(frmText, @"^Begin\s+\{[^}]+\}\s+\w+\s*$", RegexOptions.Multiline);
+        if (!beginMatch.Success)
+        {
+            return frmText;
+        }
+
+        var startIdx = beginMatch.Index + beginMatch.Length;
+        var nextBeginMatch = Regex.Match(frmText[startIdx..], @"^\s*Begin\s+", RegexOptions.Multiline);
+        var endMatch = Regex.Match(frmText[startIdx..], @"^\s*End\s*$", RegexOptions.Multiline);
+
+        int endIdxOfProperties;
+        if (nextBeginMatch.Success && endMatch.Success)
+        {
+            endIdxOfProperties = startIdx + Math.Min(nextBeginMatch.Index, endMatch.Index);
+        }
+        else if (nextBeginMatch.Success)
+        {
+            endIdxOfProperties = startIdx + nextBeginMatch.Index;
+        }
+        else if (endMatch.Success)
+        {
+            endIdxOfProperties = startIdx + endMatch.Index;
+        }
+        else
+        {
+            return frmText;
+        }
+
+        var rootPropsText = frmText[startIdx..endIdxOfProperties];
+        var newline = rootPropsText.Contains("\r\n") ? "\r\n" : "\n";
+
+        // 1. Sync Caption (formCaption)
+        if (frxFormControl.TryGetValue("formCaption", out var captionVal) && captionVal is string captionStr)
+        {
+            var captionRegex = new Regex(@"^(\s*)Caption(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            if (captionRegex.IsMatch(rootPropsText))
+            {
+                rootPropsText = captionRegex.Replace(rootPropsText, $"$1Caption$2=   \"{captionStr}\"");
+            }
+            else
+            {
+                rootPropsText = rootPropsText.TrimEnd('\r', '\n');
+                rootPropsText += $"{newline}   Caption         =   \"{captionStr}\"";
+            }
+        }
+
+        // Helper to convert Pt value to Twips
+        double? GetPtValue(string key)
+        {
+            if (frxFormControl.TryGetValue(key, out var val) && val is not null)
+            {
+                return Convert.ToDouble(val);
+            }
+            return null;
+        }
+
+        // 2. Sync ClientHeight (displayedHeightPt)
+        var heightPt = GetPtValue("displayedHeightPt");
+        if (heightPt.HasValue)
+        {
+            var heightTwips = Math.Round(heightPt.Value * 20.0, 3);
+            var formattedHeight = heightTwips.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var heightRegex = new Regex(@"^(\s*)ClientHeight(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            if (heightRegex.IsMatch(rootPropsText))
+            {
+                rootPropsText = heightRegex.Replace(rootPropsText, $"$1ClientHeight$2=   {formattedHeight}");
+            }
+            else
+            {
+                rootPropsText = rootPropsText.TrimEnd('\r', '\n');
+                rootPropsText += $"{newline}   ClientHeight    =   {formattedHeight}";
+            }
+        }
+
+        // 3. Sync ClientWidth (displayedWidthPt)
+        var widthPt = GetPtValue("displayedWidthPt");
+        if (widthPt.HasValue)
+        {
+            var widthTwips = Math.Round(widthPt.Value * 20.0, 3);
+            var formattedWidth = widthTwips.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var widthRegex = new Regex(@"^(\s*)ClientWidth(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            if (widthRegex.IsMatch(rootPropsText))
+            {
+                rootPropsText = widthRegex.Replace(rootPropsText, $"$1ClientWidth$2=   {formattedWidth}");
+            }
+            else
+            {
+                rootPropsText = rootPropsText.TrimEnd('\r', '\n');
+                rootPropsText += $"{newline}   ClientWidth     =   {formattedWidth}";
+            }
+        }
+
+        return frmText[..startIdx] + rootPropsText + frmText[endIdxOfProperties..];
     }
 }

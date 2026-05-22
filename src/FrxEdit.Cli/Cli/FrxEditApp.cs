@@ -83,6 +83,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var patch = JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(patchPath), JsonOptions)
             ?? throw new CliException("Patch file is empty.");
+        patch.Normalize();
         if (patch.Add is { Count: > 0 })
         {
             throw new CliException("The in-place apply command does not support 'add'. Use rebuild --stream-mode full-patch.");
@@ -110,6 +111,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var targetLayout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
         VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
         updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
+        updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
         UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch.Renames, patch.Remove);
 
@@ -131,6 +133,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             ? JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(Path.GetFullPath(patchPath)), JsonOptions)
                 ?? throw new CliException("Patch file is empty.")
             : null;
+        patch?.Normalize();
 
         if (patch is not null && streamMode is not (RebuildStreamMode.ObjectStreamPatchProperties or RebuildStreamMode.FormAndObjectPatch))
         {
@@ -145,13 +148,13 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
         if (patch is not null)
         {
-            PatchValidator.Validate(patch, sourceLayout.Controls);
-            RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch);
+            PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
+            RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch, formName: project.FormName);
         }
 
         var targetLayout = patch is null
             ? sourceLayout
-            : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch);
+            : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch, formName: project.FormName);
         if (patch is not null)
         {
             VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
@@ -166,6 +169,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
         updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch?.Code);
+        updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
         var removedScopeNames = targetLayout.RemovedControls?.Select(control => control.Name).ToList() ?? patch?.Remove;
         UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames, removedScopeNames);
@@ -220,9 +224,9 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             var project = UserFormProject.Load(outFrmPath);
             var source = FrxBinary.Read(project.FrxPath);
             var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, ParserMode.Strict);
-            PatchValidator.Validate(patch, sourceLayout.Controls);
-            RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true);
-            var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true);
+            PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
+            RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true, formName: project.FormName);
+            var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true, formName: project.FormName);
             VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
             var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, RebuildStreamMode.FormAndObjectPatch);
             File.WriteAllBytes(outFrxPath, rebuiltBytes);
@@ -230,6 +234,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
             updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
             updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
+            updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
             File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
         }
 

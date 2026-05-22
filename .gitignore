@@ -31,3 +31,6 @@ UserForm1.inspect.old.json
 UserForm1.inspect.raw.old.json
 userformallcontrol.inspect.old.json
 scratch_tabstrip.cs
+
+out/
+scratch/

@@ -9,141 +9,113 @@ internal sealed record LayoutDocument(
 internal sealed record HumanLayoutDocument(
     string FormName,
     string FrxFile,
-    Dictionary<string, object?> FormProperties,
-    IReadOnlyList<HumanControlInfo> Controls)
+    Dictionary<string, Dictionary<string, object?>> Properties)
 {
     private static readonly string[] HumanPropertyOrder =
     [
-        "caption",
-        "text",
-        "value",
-        "tag",
-        "controlTipText",
-        "controlSource",
-        "accelerator",
-        "textAlign",
-        "paragraphAlign",
-        "backColor",
-        "foreColor",
-        "borderColor",
-        "fontName",
-        "fontSize",
-        "fontWeight",
-        "fontEffects",
-        "fontItalic",
-        "fontUnderline",
-        "fontStrikethrough",
-        "enabled",
-        "visible",
-        "locked",
-        "tabIndex",
-        "tabStop",
-        "default",
-        "cancel",
-        "backStyle",
-        "alignment",
-        "wordWrap",
-        "autoSize",
-        "autoTab",
-        "autoWordSelect",
-        "hideSelection",
-        "integralHeight",
-        "multiLine",
-        "selectionMargin",
-        "enterKeyBehavior",
-        "tabKeyBehavior",
-        "enterFieldBehavior",
-        "dragBehavior",
-        "imeMode",
-        "takeFocusOnClick",
-        "maxLength",
-        "passwordChar",
-        "scrollBars",
-        "specialEffect",
-        "borderStyle",
-        "displayStyle",
-        "listWidth",
-        "boundColumn",
-        "textColumn",
-        "columnCount",
-        "listRows",
-        "matchEntry",
-        "listStyle",
-        "showDropButtonWhen",
-        "dropButtonStyle",
-        "multiSelect",
-        "columnHeads",
-        "matchRequired",
-        "editable",
-        "mousePointer",
-        "picturePosition",
-        "min",
-        "max",
-        "position",
-        "smallChange",
-        "largeChange",
-        "orientation"
+        "caption", "text", "value", "tag", "controlTipText", "controlSource", "accelerator",
+        "textAlign", "paragraphAlign", "backColor", "foreColor", "borderColor", "fontName",
+        "fontSize", "fontWeight", "fontEffects", "fontItalic", "fontUnderline", "fontStrikethrough",
+        "enabled", "visible", "locked", "tabIndex", "tabStop", "default", "cancel", "backStyle",
+        "alignment", "wordWrap", "autoSize", "autoTab", "autoWordSelect", "hideSelection",
+        "integralHeight", "multiLine", "selectionMargin", "enterKeyBehavior", "tabKeyBehavior",
+        "enterFieldBehavior", "dragBehavior", "imeMode", "takeFocusOnClick", "maxLength",
+        "passwordChar", "scrollBars", "specialEffect", "borderStyle", "displayStyle", "listWidth",
+        "boundColumn", "textColumn", "columnCount", "listRows", "matchEntry", "listStyle",
+        "showDropButtonWhen", "dropButtonStyle", "multiSelect", "columnHeads", "matchRequired",
+        "editable", "mousePointer", "picturePosition", "min", "max", "position", "smallChange",
+        "largeChange", "orientation"
     ];
 
     public static HumanLayoutDocument FromRaw(LayoutDocument raw)
     {
-        return new HumanLayoutDocument(
-            raw.FormName,
-            raw.FrxFile,
-            raw.FormProperties,
-            raw.Controls.Select(ToHumanControl).ToList());
-    }
+        var properties = new Dictionary<string, Dictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
 
-    private static HumanControlInfo ToHumanControl(ControlInfo control)
-    {
-        var bounds = new HumanBounds(
-            Left: new HumanMeasure(control.LeftPt, control.LeftOffset is not null),
-            Top: new HumanMeasure(control.TopPt, control.TopOffset is not null),
-            Width: new HumanMeasure(control.WidthPt, control.WidthOffset is not null),
-            Height: new HumanMeasure(control.HeightPt, control.HeightOffset is not null));
-
-        return new HumanControlInfo(
-            control.Name,
-            control.Type,
-            control.Parent,
-            bounds,
-            BuildHumanProperties(control));
-    }
-
-    private static IReadOnlyList<HumanProperty> BuildHumanProperties(ControlInfo control)
-    {
-        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        var sources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (control.Properties is not null)
+        var formProps = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        if (raw.FrxFormControl is null)
         {
-            foreach (var name in HumanPropertyOrder)
+            foreach (var kvp in raw.FormProperties)
             {
-                if (control.Properties.TryGetValue(name, out var value))
-                {
-                    values[name] = value;
-                    sources[name] = "frx";
-                }
+                formProps[kvp.Key] = kvp.Value;
             }
         }
+        else
+        {
+            foreach (var kvp in raw.FrxFormControl)
+            {
+                if (kvp.Value is System.Text.Json.JsonElement element && (element.ValueKind == System.Text.Json.JsonValueKind.Object || element.ValueKind == System.Text.Json.JsonValueKind.Array))
+                {
+                    continue;
+                }
+                formProps[kvp.Key] = kvp.Value;
+            }
+        }
+        properties[raw.FormName] = formProps;
 
-        AddDefaultPlaceholders(control.Type, values, sources);
+        foreach (var control in raw.Controls)
+        {
+            var controlProps = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["type"] = control.Type,
+                ["parent"] = control.Parent,
+                ["leftPt"] = control.LeftPt,
+                ["topPt"] = control.TopPt,
+                ["widthPt"] = control.WidthPt,
+                ["heightPt"] = control.HeightPt
+            };
 
-        return HumanPropertyOrder
-            .Where(values.ContainsKey)
-            .Select(name => new HumanProperty(
-                name,
-                values[name],
-                sources.TryGetValue(name, out var source) ? source : "unknown",
-                IsCurrentlyEditable(name, control.Properties)))
-            .Concat(values.Keys
-                .Where(name => !HumanPropertyOrder.Contains(name, StringComparer.OrdinalIgnoreCase))
-                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .Select(name => new HumanProperty(
-                    name,
-                    values[name],
-                    sources.TryGetValue(name, out var source) ? source : "unknown",
-                    IsCurrentlyEditable(name, control.Properties))))
-            .ToList();
+            var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            var sources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            AddDefaultPlaceholders(control.Type, values, sources);
+
+            if (control.Properties is not null)
+            {
+                foreach (var name in HumanPropertyOrder)
+                {
+                    if (control.Properties.TryGetValue(name, out var value))
+                    {
+                        controlProps[name] = value;
+                    }
+                    else if (values.TryGetValue(name, out var defaultValue))
+                    {
+                        controlProps[name] = defaultValue;
+                    }
+                }
+                foreach (var kvp in control.Properties)
+                {
+                    if (!controlProps.ContainsKey(kvp.Key))
+                    {
+                        if (!kvp.Key.EndsWith("Offset", StringComparison.OrdinalIgnoreCase) &&
+                            !kvp.Key.EndsWith("Span", StringComparison.OrdinalIgnoreCase))
+                        {
+                            controlProps[kvp.Key] = kvp.Value;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                foreach (var name in HumanPropertyOrder)
+                {
+                    if (values.TryGetValue(name, out var defaultValue))
+                    {
+                        controlProps[name] = defaultValue;
+                    }
+                }
+            }
+            
+            foreach (var kvp in values)
+            {
+                if (!controlProps.ContainsKey(kvp.Key))
+                {
+                    controlProps[kvp.Key] = kvp.Value;
+                }
+            }
+
+            properties[control.Name] = controlProps;
+        }
+
+        return new HumanLayoutDocument(raw.FormName, raw.FrxFile, properties);
     }
 
     private static void AddDefaultPlaceholders(
@@ -268,83 +240,7 @@ internal sealed record HumanLayoutDocument(
         values[name] = value;
         sources[name] = "default";
     }
-
-    private static bool IsCurrentlyEditable(string name, Dictionary<string, object?>? properties)
-    {
-        if (properties is null)
-        {
-            return false;
-        }
-
-        if (IsRebuiltMorphProperty(name, properties))
-        {
-            return true;
-        }
-
-        return name.ToLowerInvariant() switch
-        {
-            "caption" or "tag" or "controltiptext" or "controlsource" or "fontname" or "value" or "groupname" =>
-                properties.ContainsKey($"{name}Span") || properties.ContainsKey($"{name}Offset"),
-            "backcolor" or "forecolor" or "fontsize" or "bordercolor" =>
-                properties.ContainsKey($"{name}Offset"),
-            "tabindex" =>
-                properties.ContainsKey("tabIndexOffset") || properties.ContainsKey("recordMarkerOffset"),
-            _ => false
-        };
-    }
-
-    private static bool IsRebuiltMorphProperty(string name, Dictionary<string, object?> properties)
-    {
-        if (!properties.TryGetValue("controlType", out var controlType) ||
-            (!string.Equals(controlType?.ToString(), "TextBox", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(controlType?.ToString(), "ComboBox", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(controlType?.ToString(), "ListBox", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(controlType?.ToString(), "CheckBox", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(controlType?.ToString(), "OptionButton", StringComparison.OrdinalIgnoreCase)))
-        {
-            return false;
-        }
-
-        if (string.Equals(controlType?.ToString(), "CheckBox", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(controlType?.ToString(), "OptionButton", StringComparison.OrdinalIgnoreCase))
-        {
-            return name.ToLowerInvariant() is
-                "caption" or "value" or "groupname" or "fontname" or "fontsize" or "backcolor" or
-                "forecolor" or "enabled" or "locked" or "backstyle" or "alignment" or "wordwrap" or
-                "autosize" or "imemode" or "specialeffect" or "mousepointer" or "pictureposition" or
-                "accelerator" or "textalign";
-        }
-
-        return name.ToLowerInvariant() is
-            "value" or "fontname" or "fontsize" or "backcolor" or "forecolor" or "bordercolor" or
-            "enabled" or "locked" or "backstyle" or "autosize" or "autotab" or "autowordselect" or
-            "dragbehavior" or "enterfieldbehavior" or "enterkeybehavior" or "hideselection" or
-            "integralheight" or "multiline" or "selectionmargin" or "tabkeybehavior" or "wordwrap" or
-            "imemode" or "maxlength" or "passwordchar" or "scrollbars" or "borderstyle" or
-            "specialeffect" or "mousepointer" or "textalign" or "listwidth" or "boundcolumn" or
-            "textcolumn" or "columncount" or "listrows" or "matchentry" or "liststyle" or
-            "showdropbuttonwhen" or "dropbuttonstyle" or "multiselect" or "columnheads" or
-            "matchrequired" or "editable" or "displaystyle" or "caption" or "groupname" or
-            "pictureposition" or "accelerator" or "alignment";
-    }
 }
-
-internal sealed record HumanControlInfo(
-    string Name,
-    string Type,
-    string? Parent,
-    HumanBounds Bounds,
-    IReadOnlyList<HumanProperty> Properties);
-
-internal sealed record HumanBounds(
-    HumanMeasure Left,
-    HumanMeasure Top,
-    HumanMeasure Width,
-    HumanMeasure Height);
-
-internal sealed record HumanMeasure(double? Pt, bool Editable);
-
-internal sealed record HumanProperty(string Name, object? Value, string Source, bool Editable);
 
 internal sealed record LayoutInspection(
     IReadOnlyList<ControlInfo> Controls,

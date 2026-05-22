@@ -12,6 +12,28 @@ internal static class TextPropsFactory
         var paragraphAlign = GetParagraphAlign(properties) ?? 3;
         var fontHeight = checked((uint)Math.Round(fontSize * 20.0, MidpointRounding.AwayFromZero));
 
+        var fontItalic = MsFormsFactoryBinary.GetBool(properties, "fontItalic") ?? false;
+        var fontUnderline = MsFormsFactoryBinary.GetBool(properties, "fontUnderline") ?? false;
+        var fontStrikethrough = MsFormsFactoryBinary.GetBool(properties, "fontStrikethrough") ?? false;
+        var isBold = MsFormsFactoryBinary.GetBool(properties, "fontBold") ?? false;
+        var fontWeight = MsFormsFactoryBinary.GetInt32(properties, "fontWeight") ?? (isBold ? 700 : 400);
+        var fontCharSet = MsFormsFactoryBinary.GetInt32(properties, "fontCharSet") ?? 0;
+        var fontPitchAndFamily = MsFormsFactoryBinary.GetInt32(properties, "fontPitchAndFamily") ?? 2;
+
+        if (fontItalic || fontUnderline || fontStrikethrough)
+        {
+            propMask |= 1u << 1;
+        }
+        if (fontWeight != 400)
+        {
+            propMask |= 1u << 7;
+        }
+
+        uint fontEffects = 0;
+        if (fontItalic) fontEffects |= 1u << 1;
+        if (fontUnderline) fontEffects |= 1u << 2;
+        if (fontStrikethrough) fontEffects |= 1u << 3;
+
         using var dataBlock = new MemoryStream();
         if (HasBit(propMask, 0))
         {
@@ -20,7 +42,7 @@ internal static class TextPropsFactory
 
         if (HasBit(propMask, 1))
         {
-            MsFormsFactoryBinary.WriteUInt32(dataBlock, 0);
+            MsFormsFactoryBinary.WriteUInt32(dataBlock, fontEffects);
         }
 
         if (HasBit(propMask, 2))
@@ -30,12 +52,12 @@ internal static class TextPropsFactory
 
         if (HasBit(propMask, 4))
         {
-            dataBlock.WriteByte(0);
+            dataBlock.WriteByte((byte)fontCharSet);
         }
 
         if (HasBit(propMask, 5))
         {
-            dataBlock.WriteByte(2);
+            dataBlock.WriteByte((byte)fontPitchAndFamily);
         }
 
         if (HasBit(propMask, 6))
@@ -46,7 +68,7 @@ internal static class TextPropsFactory
         if (HasBit(propMask, 7))
         {
             MsFormsFactoryBinary.WritePadding(dataBlock, 2);
-            MsFormsFactoryBinary.WriteUInt16(dataBlock, 400);
+            MsFormsFactoryBinary.WriteUInt16(dataBlock, (ushort)fontWeight);
         }
 
         MsFormsFactoryBinary.WritePadding(dataBlock, 4);
@@ -64,21 +86,57 @@ internal static class TextPropsFactory
     public static Dictionary<string, object?> BuildMetadata(uint propMask, Dictionary<string, object?> properties)
     {
         var fontSize = MsFormsFactoryBinary.GetDouble(properties, "fontSize") ?? 8.25;
+        var fontItalic = MsFormsFactoryBinary.GetBool(properties, "fontItalic") ?? false;
+        var fontUnderline = MsFormsFactoryBinary.GetBool(properties, "fontUnderline") ?? false;
+        var fontStrikethrough = MsFormsFactoryBinary.GetBool(properties, "fontStrikethrough") ?? false;
+        var isBold = MsFormsFactoryBinary.GetBool(properties, "fontBold") ?? false;
+        var fontWeight = MsFormsFactoryBinary.GetInt32(properties, "fontWeight") ?? (isBold ? 700 : 400);
+        var fontCharSet = MsFormsFactoryBinary.GetInt32(properties, "fontCharSet") ?? 0;
+        var fontPitchAndFamily = MsFormsFactoryBinary.GetInt32(properties, "fontPitchAndFamily") ?? 2;
+
+        if (fontItalic || fontUnderline || fontStrikethrough)
+        {
+            propMask |= 1u << 1;
+        }
+        if (fontWeight != 400)
+        {
+            propMask |= 1u << 7;
+        }
+
         var metadata = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         {
             ["fontName"] = MsFormsFactoryBinary.GetString(properties, "fontName") ?? "Tahoma",
             ["fontSize"] = fontSize,
             ["fontSizeRaw"] = checked((int)Math.Round(fontSize * 20.0, MidpointRounding.AwayFromZero)),
-            ["fontCharSet"] = 0,
-            ["fontPitchAndFamily"] = 2,
+            ["fontCharSet"] = fontCharSet,
+            ["fontPitchAndFamily"] = fontPitchAndFamily,
             ["textPropsPropMask"] = $"0x{propMask:X8}"
         };
+
+        if (HasBit(propMask, 1))
+        {
+            uint fontEffects = 0;
+            if (fontItalic) fontEffects |= 1u << 1;
+            if (fontUnderline) fontEffects |= 1u << 2;
+            if (fontStrikethrough) fontEffects |= 1u << 3;
+
+            metadata["fontEffectsHex"] = $"0x{fontEffects:X8}";
+            metadata["fontItalic"] = fontItalic;
+            metadata["fontUnderline"] = fontUnderline;
+            metadata["fontStrikethrough"] = fontStrikethrough;
+        }
 
         if (HasBit(propMask, 6))
         {
             var paragraphAlign = GetParagraphAlign(properties) ?? 3;
             metadata["paragraphAlign"] = paragraphAlign;
             metadata["textAlign"] = ParagraphAlignToTextAlign(paragraphAlign);
+        }
+
+        if (HasBit(propMask, 7))
+        {
+            metadata["fontWeight"] = fontWeight;
+            metadata["fontBold"] = fontWeight >= 700;
         }
 
         return metadata;

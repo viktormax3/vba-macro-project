@@ -7,6 +7,48 @@ internal sealed class PatchDocument
     public Dictionary<string, string?>? Move { get; set; }
     public List<AddControlPatch>? Add { get; set; }
     public CodePatch? Code { get; set; }
+
+    public void Normalize()
+    {
+        if (Properties is null) return;
+
+        Layout ??= new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase);
+
+        var keysToRemove = new[] { "type", "parent", "formName", "frxFile", "recordIndex", "name" };
+
+        foreach (var pair in Properties)
+        {
+            var controlName = pair.Key;
+            var props = pair.Value;
+            var layoutPatch = new LayoutPatch();
+            bool hasLayout = false;
+
+            if (props.TryGetValue("leftPt", out var leftPt) && leftPt.ValueKind == System.Text.Json.JsonValueKind.Number) { layoutPatch.LeftPt = leftPt.GetDouble(); hasLayout = true; props.Remove("leftPt"); }
+            if (props.TryGetValue("topPt", out var topPt) && topPt.ValueKind == System.Text.Json.JsonValueKind.Number) { layoutPatch.TopPt = topPt.GetDouble(); hasLayout = true; props.Remove("topPt"); }
+            if (props.TryGetValue("widthPt", out var widthPt) && widthPt.ValueKind == System.Text.Json.JsonValueKind.Number) { layoutPatch.WidthPt = widthPt.GetDouble(); hasLayout = true; props.Remove("widthPt"); }
+            if (props.TryGetValue("heightPt", out var heightPt) && heightPt.ValueKind == System.Text.Json.JsonValueKind.Number) { layoutPatch.HeightPt = heightPt.GetDouble(); hasLayout = true; props.Remove("heightPt"); }
+
+            if (hasLayout)
+            {
+                if (Layout.TryGetValue(controlName, out var existing))
+                {
+                    existing.LeftPt = layoutPatch.LeftPt ?? existing.LeftPt;
+                    existing.TopPt = layoutPatch.TopPt ?? existing.TopPt;
+                    existing.WidthPt = layoutPatch.WidthPt ?? existing.WidthPt;
+                    existing.HeightPt = layoutPatch.HeightPt ?? existing.HeightPt;
+                }
+                else
+                {
+                    Layout[controlName] = layoutPatch;
+                }
+            }
+
+            foreach (var k in keysToRemove)
+            {
+                props.Remove(k);
+            }
+        }
+    }
 }
 
 internal sealed class CodePatch

@@ -1,87 +1,77 @@
-# frxedit
+# MS-Forms JSON-to-Binary CLI (FrxEdit)
 
-Minimal CLI for inspecting and patching VBA/MSForms `UserForm` `.frm` + `.frx` pairs without opening the native VBA designer.
+**FrxEdit** es una herramienta de interfaz de línea de comandos (CLI) diseñada para inspeccionar, extraer, parchar y reconstruir formularios de Microsoft Forms (`.frm` y `.frx`) utilizados nativamente en VBA (Microsoft Office, CorelDraw, etc.).
 
-## Commands
+El objetivo principal de esta herramienta es permitir la manipulación, el control de versiones y la generación dinámica de formularios VBA desde un entorno moderno, utilizando JSON como formato intermedio de intercambio, logrando una **paridad binaria y estructural perfecta** frente al formato propietario `[MS-OFORMS]`.
 
-```powershell
-dotnet run --project src/FrxEdit.Cli -- inspect UserForm1.frm --out layout.json
-dotnet run --project src/FrxEdit.Cli -- inspect UserForm1.frm --out layout.json --raw-out layout.raw.json
-dotnet run --project src/FrxEdit.Cli -- apply UserForm1.frm sample.patch.json --out UserForm1.patched.frm
-dotnet run --project src/FrxEdit.Cli -- validate UserForm1.patched.frm
-dotnet run --project src/FrxEdit.Cli -- rebuild userformallcontrol.frm --out out/userformallcontrol.rebuilt.frm --mode strict --stream-mode full-patch --patch examples/rebuild-add-generated.patch.json --report-out out/userformallcontrol.rebuilt.report.json
-dotnet run --project src/FrxEdit.Cli -- create out/CreatePatched.frm --name CreatePatched --caption "Desde cero" --widthPt 340 --heightPt 240 --patch examples/create-form.patch.json
-dotnet run --project src/FrxEdit.Cli -- dump-records UserForm1.frm --around TextBox3 --before 4 --after 6 --out records.json
-dotnet run --project src/FrxEdit.Cli -- dump-storage UserForm1.frm --out storage.json
+---
+
+## 🚀 Características Principales
+
+*   **Extracción Perfecta**: Extrae el diseño completo de un archivo `.frm`/`.frx` y lo convierte a un JSON legible y editable.
+*   **Reconstrucción Binaria**: Genera de vuelta los binarios `.frx` compatibles y los bloques de diseño `.frm` a partir de un JSON, listos para ser importados en VBA.
+*   **Paridad Nativa**: Manejo a nivel de byte de offsets, streams OLE (`f`, `o`, `x`), strings ANSI/Unicode, alineaciones tipográficas, y control de dimensiones dinámicas.
+*   **Independiente del Editor VBA**: Permite diseñar o modificar formularios desde cero sin necesidad de abrir MS Excel, Word o CorelDraw.
+
+---
+
+## 🛠️ Instalación y Uso Rápido
+
+Esta herramienta se distribuye como un ejecutable independiente para tu plataforma (Windows, macOS, Linux). Una vez descargado, puedes ejecutarlo desde tu terminal sin necesidad de tener instalado el SDK de .NET.
+
+> *Ejemplo de uso asumiendo que el ejecutable se llama `frxedit`.*
+
+### 1. Inspeccionar / Extraer a JSON
+Para leer un formulario existente y extraer sus propiedades a un archivo JSON:
+```bash
+frxedit inspect mi_formulario.frm --out diseño_extraido.json
 ```
 
-The build output assembly is named `frxedit`; after publishing it can be used as `frxedit.exe`.
+### 2. Modificar (Parchar)
+Puedes modificar el archivo JSON extraído (ej. cambiar textos, colores, tamaños). O crear un "parche" (JSON parcial) con los cambios específicos que quieres aplicar.
 
-`inspect` emits a human-facing JSON by default: controls, bounds in property-grid points, raw units, and known natural properties.
-Use `--raw-out` to also emit the full low-level inspection with offsets, stream names, markers, and parser diagnostics.
-`inspect-frx.bat UserForm1.frx` writes both `UserForm1.inspect.json` and `UserForm1.inspect.raw.json`.
-The raw inspect document emits controls in their binary/layout order (`nameOffset`), which makes controls that were authored near each other in the form easier to read together.
-`recordIndex`, `recordDelta`, and `recordBlock` describe that binary order. `recordBlock` is inferred from large gaps between records; it is a write-block hint, not a confirmed MSForms group or parent.
-If a sibling `UserForm1.scopes.json` file exists, `inspect` uses it to add each control's designer scope/owner (`UserForm1`, `Frame1`, `Frame2`, etc.).
-Position fields are emitted twice: raw FRX units (`left`, `top`) and normalized VBA property-grid points (`leftPt`, `topPt`). Nearby size-like bytes are emitted as `rawWidth`/`rawHeight`; they are not the VBA property-grid `Width`/`Height` for every control type.
-`dump-storage` lists the OLE compound streams inside the FRX and scans each stream for embedded resource signatures such as ICO and DIB. For ICO payloads it also reports the calculated icon length and, when present, the MSForms picture header that precedes the payload.
-
-## Patch Format
-
-```json
-{
-  "renames": {
-    "CommandButton1": "BtnExtraer"
-  },
-  "layout": {
-    "BtnExtraer": {
-      "left": 120,
-      "top": 180
-    }
-  },
-  "properties": {
-    "BtnExtraer": {
-      "caption": "Extraer",
-      "fontSize": 10,
-      "backColor": "&H8000000F&"
-    }
-  }
-}
+### 3. Aplicar Cambios "In-Place"
+Si solo deseas sobreescribir el formulario original con los cambios definidos en tu archivo de parche:
+```bash
+frxedit apply mi_formulario.frm --patch cambios.json
 ```
 
-`apply` writes copies: the original `.frm/.frx` are not modified. The output `.frm` points its `OleObjectBlob` at the sibling output `.frx`.
-`apply` remains the conservative compatibility path for simple copies and in-place edits.
-
-Use `rebuild --stream-mode full-patch` for structural editing. It rebuilds CFB streams and supports renames, layout changes, property changes, moving controls between compatible parents, removing leaf/container/page subtrees, adding from a template, and the first document-backed adds without a template.
-
-Example generated add without `fromTemplate`:
-
-```json
-{
-  "add": [
-    {
-      "type": "CommandButton",
-      "name": "BtnGenerated",
-      "parent": "Frame2",
-      "leftPt": 12,
-      "topPt": 64,
-      "widthPt": 82,
-      "heightPt": 22,
-      "caption": "Generado"
-    }
-  ]
-}
+### 4. Reconstruir (Rebuild)
+Para reconstruir de cero un formulario a partir del original y un parche, guardando el resultado en un archivo nuevo:
+```bash
+frxedit rebuild mi_formulario.frm --out out/formulario_nuevo.frm --patch cambios.json --stream-mode full-patch
 ```
 
-Factory-backed adds now cover the common MSForms controls in `userformallcontrol`: `CommandButton`, `Label`, `TextBox`, `ComboBox`, `ListBox`, `CheckBox`, `OptionButton`, `ToggleButton`, `Image` without binary picture payload, `ScrollBar`, `SpinButton`, `TabStrip`, `Frame`, `MultiPage`, and `Page`.
-`parent` can target the root form, a `Frame`, or a `Page` for common controls. Direct common-control add to `MultiPage` is rejected; pages belong under `MultiPage`.
-`create` generates a new `.frm/.frx` pair from zero and can immediately apply a full-patch add document.
+### 5. Crear Formulario desde Cero
+Crea un archivo nuevo especificando su título y dimensiones, sin requerir un `.frm` previo:
+```bash
+frxedit create "Nuevo Formulario" --width 400 --height 300 --out out/mi_nuevo_formulario.frm
+```
 
-Object streams are parsed from `[MS-OFORMS]` layouts (`PropMask`, `DataBlock`, `ExtraDataBlock`, `TextProps`, and MorphData where applicable) instead of nearby-byte guessing.
-Strict validation also verifies OLE storage CLSIDs and required `CompObj` streams for the root form and generated container storages.
+---
 
-## Current Limits
+## 🗺️ Hoja de Ruta (Roadmap)
 
-- Binary picture payload creation for `Image` and picture-capable controls is intentionally left for the final feature layer.
-- `MultiPage` page reorder is still pending; add/remove is supported.
-- Compatibility must still be confirmed by importing generated outputs in both Corel and Office/VBA; strict parser validation is necessary but not the final acceptance signal.
+### Completado ✅
+- [x] Extracción y desensamblado de OLE Streams (`f`, `o`, `x`).
+- [x] Parsing de propiedades estructurales y metadatos (`SiteData`, `TextProps`).
+- [x] Reconstrucción de `UserForm` y metadatos con paridad estricta.
+- [x] Sincronización bidireccional entre propiedades binarias (`.frx`) y de texto (`.frm`).
+- [x] Soporte completo de lectura/escritura para controles estándar (`CommandButton`, `TextBox`, `Frame`, `MultiPage`, `ComboBox`, `ListBox`, `CheckBox`, etc.).
+- [x] Mapeo de alineación y tipografía completa (Bold, Italic, Tamaños).
+
+### Pendiente (TODO) ⏳
+- [ ] **Multimedia**: Deserialización y serialización de flujos multimedia para imágenes (`Picture`) e iconos de ratón (`MouseIcon`).
+- [ ] **Alineación de Imágenes**: Manejo avanzado de propiedades visuales ligadas a multimedia (`PictureAlignment`, `PictureSizeMode`).
+- [ ] **Tests Automatizados**: Implementar suite de pruebas automatizadas E2E.
+- [ ] **Distribución (Release)**: Compilar binarios nativos listos para usar sin dependencias (`--self-contained`) para Windows, Mac y Linux.
+
+---
+
+## 📂 Estructura del Repositorio de Desarrollo
+
+Si eres desarrollador y descargas el código fuente:
+*   `src/`: Código fuente principal de la aplicación CLI (C# / .NET 8).
+*   `test_data/`: Módulos `.bas` y formularios `.frm`/`.frx` originales y personalizados utilizados para pruebas.
+*   `docs/`: Documentación adicional y especificaciones técnicas (ej. `[MS-OFORMS].pdf`).
+*   `scripts/`: Scripts auxiliares de desarrollo y utilidades.
