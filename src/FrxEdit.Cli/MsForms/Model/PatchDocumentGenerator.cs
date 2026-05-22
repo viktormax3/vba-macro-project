@@ -29,8 +29,35 @@ internal static class PatchDocumentGenerator
         "formMousePointer", "formScrollBars", "formCycle", "formSpecialEffect", "formPictureAlignment",
         "formPictureSizeMode", "formZoom", "nextAvailableId", "displayedWidth", "displayedHeight",
         "displayedWidthPt", "displayedHeightPt", "logicalWidth", "logicalHeight", "logicalWidthPt",
-        "logicalHeightPt", "scrollLeft", "scrollTop"
+        "logicalHeightPt", "scrollLeft", "scrollTop", "formBooleanProperties",
+        "StartUpPosition", "ShowModal", "Tag", "Left", "Top", "Width", "Height", "ClientLeft", "ClientTop", "ClientWidth", "ClientHeight",
+        "DrawBuffer"
     };
+
+    private static string CanonicalizeRootFormPropertyName(string name)
+    {
+        if (name.StartsWith("form", StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = name[4..];
+            if (rest.Length > 0)
+                return char.ToLowerInvariant(rest[0]) + rest[1..];
+        }
+        if (name.Equals("displayedWidthPt", StringComparison.OrdinalIgnoreCase)) return "widthPt";
+        if (name.Equals("displayedHeightPt", StringComparison.OrdinalIgnoreCase)) return "heightPt";
+        if (name.Equals("StartUpPosition", StringComparison.OrdinalIgnoreCase)) return "startUpPosition";
+        if (name.Equals("ShowModal", StringComparison.OrdinalIgnoreCase)) return "showModal";
+        if (name.Equals("Tag", StringComparison.OrdinalIgnoreCase)) return "tag";
+        if (name.Equals("Left", StringComparison.OrdinalIgnoreCase)) return "left";
+        if (name.Equals("Top", StringComparison.OrdinalIgnoreCase)) return "top";
+        if (name.Equals("Width", StringComparison.OrdinalIgnoreCase)) return "width";
+        if (name.Equals("Height", StringComparison.OrdinalIgnoreCase)) return "height";
+        if (name.Equals("ClientLeft", StringComparison.OrdinalIgnoreCase)) return "clientLeft";
+        if (name.Equals("ClientTop", StringComparison.OrdinalIgnoreCase)) return "clientTop";
+        if (name.Equals("ClientWidth", StringComparison.OrdinalIgnoreCase)) return "clientWidth";
+        if (name.Equals("ClientHeight", StringComparison.OrdinalIgnoreCase)) return "clientHeight";
+        if (name.Equals("DrawBuffer", StringComparison.OrdinalIgnoreCase)) return "drawBuffer";
+        return name;
+    }
 
     public static PatchDocument FromRaw(LayoutInspection raw, string formName)
     {
@@ -49,7 +76,18 @@ internal static class PatchDocumentGenerator
                 }
                 if (RootFormPropertyNames.Contains(kvp.Key))
                 {
-                    formProps[kvp.Key] = kvp.Value;
+                    if (kvp.Key.Equals("formBooleanProperties", StringComparison.OrdinalIgnoreCase) && kvp.Value is string hex && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var bits = Convert.ToUInt32(hex[2..], 16);
+                        formProps["enabled"] = (bits & 1) != 0;
+                        formProps["pictureTiling"] = (bits & (1u << 4)) != 0;
+                        formProps["keepScrollBarsVisible"] = (bits & (1u << 21)) != 0;
+                        formProps["rightToLeft"] = (bits & (1u << 22)) != 0;
+                    }
+                    else
+                    {
+                        formProps[CanonicalizeRootFormPropertyName(kvp.Key)] = kvp.Value;
+                    }
                 }
             }
         }

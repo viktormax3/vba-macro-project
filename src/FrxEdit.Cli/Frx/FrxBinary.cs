@@ -61,7 +61,8 @@ internal sealed class FrxBinary
     public LayoutInspection Inspect(
         IReadOnlySet<string>? knownControlNames = null,
         IReadOnlyDictionary<string, string>? controlScopes = null,
-        ParserMode parserMode = ParserMode.Tolerant)
+        ParserMode parserMode = ParserMode.Tolerant,
+        IReadOnlyDictionary<string, object?>? frmProperties = null)
     {
         if (parserMode == ParserMode.Legacy)
         {
@@ -69,6 +70,16 @@ internal sealed class FrxBinary
         }
 
         var structured = InspectStructuredStorage(knownControlNames, controlScopes, parserMode, out var frxFormControl);
+        if (frxFormControl is not null && frmProperties is not null)
+        {
+            var merged = new Dictionary<string, object?>(frxFormControl, StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in frmProperties)
+            {
+                merged[k] = v;
+            }
+            frxFormControl = merged;
+        }
+
         if (structured.Count > 0)
         {
             var orderedStructured = structured.OrderBy(c => c.NameOffset).ToList();

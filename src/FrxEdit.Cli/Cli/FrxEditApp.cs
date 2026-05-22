@@ -56,7 +56,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var frmPath = Path.GetFullPath(parsed.Positionals[0]);
         var project = UserFormProject.Load(frmPath);
         var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
-        var layout = FrxBinary.Read(project.FrxPath).Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var layout = FrxBinary.Read(project.FrxPath).Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
         var rawDocument = new LayoutDocument(
             project.FormName,
             Path.GetFileName(project.FrxPath),
@@ -106,7 +106,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var project = UserFormProject.Load(frmPath);
         var frx = FrxBinary.Read(project.FrxPath);
         var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
-        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
         PatchValidator.Validate(patch, layout.Controls);
 
         frx.Apply(patch, project.KnownControlNames, project.ControlScopes, parserMode);
@@ -117,7 +117,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
-        var targetLayout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var targetLayout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
         VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
         updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
         updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
@@ -154,7 +154,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         // Validate the source first. This keeps the rebuilder deliberately conservative:
         // it only round-trips FRX files that the documented parser already understands.
-        var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
         if (patch is not null)
         {
             PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
@@ -185,7 +185,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var rebuiltProject = UserFormProject.Load(outFrmPath);
         var rebuilt = FrxBinary.Read(rebuiltProject.FrxPath);
-        var rebuiltLayout = rebuilt.Inspect(rebuiltProject.KnownControlNames, rebuiltProject.ControlScopes, parserMode);
+        var rebuiltLayout = rebuilt.Inspect(rebuiltProject.KnownControlNames, rebuiltProject.ControlScopes, parserMode, rebuiltProject.FormProperties);
         var comparison = RebuildComparison.From(targetLayout, rebuiltLayout) with
         {
             InputControlCount = sourceLayout.Controls.Count,
@@ -232,7 +232,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 ?? throw new CliException("Patch file is empty.");
             var project = UserFormProject.Load(outFrmPath);
             var source = FrxBinary.Read(project.FrxPath);
-            var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, ParserMode.Strict);
+            var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, ParserMode.Strict, project.FormProperties);
             PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
             RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true, formName: project.FormName);
             var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true, formName: project.FormName);
@@ -248,7 +248,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         }
 
         var validationProject = UserFormProject.Load(outFrmPath);
-        var validation = FrxBinary.Read(validationProject.FrxPath).Inspect(validationProject.KnownControlNames, validationProject.ControlScopes, ParserMode.Strict);
+        var validation = FrxBinary.Read(validationProject.FrxPath).Inspect(validationProject.KnownControlNames, validationProject.ControlScopes, ParserMode.Strict, validationProject.FormProperties);
 
         stdout.WriteLine($"Wrote {outFrmPath}");
         stdout.WriteLine($"Wrote {outFrxPath}");
@@ -342,7 +342,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var project = UserFormProject.Load(Path.GetFullPath(parsed.Positionals[0]));
         var frx = FrxBinary.Read(project.FrxPath);
         var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
-        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
         stdout.WriteLine($"OK: {Path.GetFileName(project.FrmPath)} references {Path.GetFileName(project.FrxPath)}");
         stdout.WriteLine($"OK: FRX prefix {frx.PrefixLength} bytes, OLE compound starts at 0x{frx.OleOffset:X}");
         stdout.WriteLine($"OK: {layout.Controls.Count} controls detected");

@@ -260,51 +260,79 @@ internal sealed class UserFormProject
             }
         }
 
-        // Helper to convert Pt value to Twips
-        double? GetPtValue(string key)
+        void SyncNumericProperty(string frmKey, string frxKey, bool isBoolean = false)
         {
-            if (frxFormControl.TryGetValue(key, out var val) && val is not null)
+            if (frxFormControl.TryGetValue(frxKey, out var val) && val is not null)
             {
-                return Convert.ToDouble(val);
-            }
-            return null;
-        }
-
-        // 2. Sync ClientHeight (displayedHeightPt)
-        var heightPt = GetPtValue("displayedHeightPt");
-        if (heightPt.HasValue)
-        {
-            var heightTwips = Math.Round(heightPt.Value * 20.0, 3);
-            var formattedHeight = heightTwips.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var heightRegex = new Regex(@"^(\s*)ClientHeight(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
-            if (heightRegex.IsMatch(rootPropsText))
-            {
-                rootPropsText = heightRegex.Replace(rootPropsText, $"$1ClientHeight$2=   {formattedHeight}");
-            }
-            else
-            {
-                rootPropsText = rootPropsText.TrimEnd('\r', '\n');
-                rootPropsText += $"{newline}   ClientHeight    =   {formattedHeight}";
+                var formatted = val.ToString();
+                if (isBoolean)
+                {
+                    if (val is bool b) formatted = b ? "1  'True" : "0   'False";
+                    else if (val is string s && bool.TryParse(s, out var bs)) formatted = bs ? "1  'True" : "0   'False";
+                    else if (val is int i) formatted = i != 0 ? "1  'True" : "0   'False";
+                }
+                var regex = new Regex($@"^(\s*){frmKey}(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+                if (regex.IsMatch(rootPropsText))
+                {
+                    rootPropsText = regex.Replace(rootPropsText, $"$1{frmKey}$2=   {formatted}");
+                }
+                else
+                {
+                    rootPropsText = rootPropsText.TrimEnd('\r', '\n');
+                    rootPropsText += $"{newline}   {frmKey,-15} =   {formatted}";
+                }
             }
         }
 
-        // 3. Sync ClientWidth (displayedWidthPt)
-        var widthPt = GetPtValue("displayedWidthPt");
-        if (widthPt.HasValue)
+        void SyncStringProperty(string frmKey, string frxKey)
         {
-            var widthTwips = Math.Round(widthPt.Value * 20.0, 3);
-            var formattedWidth = widthTwips.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var widthRegex = new Regex(@"^(\s*)ClientWidth(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
-            if (widthRegex.IsMatch(rootPropsText))
+            if (frxFormControl.TryGetValue(frxKey, out var val) && val is string str)
             {
-                rootPropsText = widthRegex.Replace(rootPropsText, $"$1ClientWidth$2=   {formattedWidth}");
-            }
-            else
-            {
-                rootPropsText = rootPropsText.TrimEnd('\r', '\n');
-                rootPropsText += $"{newline}   ClientWidth     =   {formattedWidth}";
+                var regex = new Regex($@"^(\s*){frmKey}(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+                if (regex.IsMatch(rootPropsText))
+                {
+                    rootPropsText = regex.Replace(rootPropsText, $"$1{frmKey}$2=   \"{str}\"");
+                }
+                else
+                {
+                    rootPropsText = rootPropsText.TrimEnd('\r', '\n');
+                    rootPropsText += $"{newline}   {frmKey,-15} =   \"{str}\"";
+                }
             }
         }
+
+        // Helper to convert Pt value to Twips and sync
+        void SyncPtProperty(string frmKey, string frxKey)
+        {
+            if (frxFormControl.TryGetValue(frxKey, out var val) && val is not null)
+            {
+                var pt = Convert.ToDouble(val);
+                var twips = Math.Round(pt * 20.0, 3);
+                var formatted = twips.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var regex = new Regex($@"^(\s*){frmKey}(\s*)=.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+                if (regex.IsMatch(rootPropsText))
+                {
+                    rootPropsText = regex.Replace(rootPropsText, $"$1{frmKey}$2=   {formatted}");
+                }
+                else
+                {
+                    rootPropsText = rootPropsText.TrimEnd('\r', '\n');
+                    rootPropsText += $"{newline}   {frmKey,-15} =   {formatted}";
+                }
+            }
+        }
+
+        SyncPtProperty("ClientHeight", "displayedHeightPt");
+        SyncPtProperty("ClientWidth", "displayedWidthPt");
+        SyncPtProperty("Left", "Left");
+        SyncPtProperty("Top", "Top");
+        SyncPtProperty("Width", "Width");
+        SyncPtProperty("Height", "Height");
+        SyncPtProperty("ClientLeft", "ClientLeft");
+        SyncPtProperty("ClientTop", "ClientTop");
+        SyncNumericProperty("StartUpPosition", "StartUpPosition");
+        SyncNumericProperty("ShowModal", "ShowModal", isBoolean: true);
+        SyncStringProperty("Tag", "Tag");
 
         return frmText[..startIdx] + rootPropsText + frmText[endIdxOfProperties..];
     }

@@ -1542,7 +1542,12 @@ internal static class RebuildPatchApplier
             return value.GetBoolean();
         }
 
-        throw new CliException($"Property '{propertyName}' for '{controlName}' must be true or false.");
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i))
+        {
+            return i != 0;
+        }
+
+        throw new CliException($"Property '{propertyName}' for '{controlName}' must be true, false, 1 or 0.");
     }
 
     private static int RequireTextAlign(string controlName, string propertyName, JsonElement value)
@@ -1648,19 +1653,86 @@ internal static class RebuildPatchApplier
         }
     }
 
+    private static void SetFormBooleanPropertyBit(Dictionary<string, object?> props, string propertyName, bool value)
+    {
+        var bits = TryGetString(props, "formBooleanProperties", out var hex) && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? Convert.ToUInt32(hex[2..], 16)
+            : 0x00200001u;
+
+        var bit = propertyName.ToLowerInvariant() switch
+        {
+            "enabled" => 0,
+            "picturetiling" => 4,
+            "keepscrollbarsvisible" => 21,
+            "righttoleft" => 22,
+            _ => throw new CliException($"Property '{propertyName}' is not a supported formBooleanProperties field.")
+        };
+
+        var mask = 1u << bit;
+        bits = value ? bits | mask : bits & ~mask;
+        props["formBooleanProperties"] = $"0x{bits:X8}";
+    }
+
     private static void ApplyFormPropertyToDictionary(string formKey, Dictionary<string, object?> props, string propertyName, JsonElement value)
     {
-        switch (propertyName.ToLowerInvariant())
+        var normalizedPropertyName = propertyName.ToLowerInvariant() switch
+        {
+            "backcolor" => "formBackColor",
+            "forecolor" => "formForeColor",
+            "bordercolor" => "formBorderColor",
+            "caption" => "formCaption",
+            "borderstyle" => "formBorderStyle",
+            "mousepointer" => "formMousePointer",
+            "scrollbars" => "formScrollBars",
+            "cycle" => "formCycle",
+            "specialeffect" => "formSpecialEffect",
+            "picturealignment" => "formPictureAlignment",
+            "picturesizemode" => "formPictureSizeMode",
+            "zoom" => "formZoom",
+            "widthpt" => "displayedWidthPt",
+            "heightpt" => "displayedHeightPt",
+            "width" => "displayedWidthPt",
+            "height" => "displayedHeightPt",
+            "clientwidth" => "displayedWidthPt",
+            "clientheight" => "displayedHeightPt",
+            "left" => "Left",
+            "top" => "Top",
+            "clientleft" => "ClientLeft",
+            "clienttop" => "ClientTop",
+            "startupposition" => "StartUpPosition",
+            "showmodal" => "ShowModal",
+            "tag" => "Tag",
+            "drawbuffer" => "DrawBuffer",
+            _ => propertyName
+        };
+
+        switch (normalizedPropertyName.ToLowerInvariant())
         {
             case "formbackcolor":
             case "formforecolor":
             case "formbordercolor":
-                var colorStr = RequireColorLikeString(formKey, propertyName, value);
-                props[CanonicalPropertyName(propertyName)] = colorStr;
-                props[CanonicalPropertyName(propertyName) + "Raw"] = MsFormsFactoryBinary.ParseColor(colorStr, 0);
+                var colorStr = RequireColorLikeString(formKey, normalizedPropertyName, value);
+                props[CanonicalPropertyName(normalizedPropertyName)] = colorStr;
+                props[CanonicalPropertyName(normalizedPropertyName) + "Raw"] = MsFormsFactoryBinary.ParseColor(colorStr, 0);
                 break;
             case "formcaption":
-                props["formCaption"] = RequireString(formKey, propertyName, value);
+            case "tag":
+                props[CanonicalPropertyName(normalizedPropertyName)] = RequireString(formKey, normalizedPropertyName, value);
+                break;
+            case "enabled":
+            case "picturetiling":
+            case "keepscrollbarsvisible":
+            case "righttoleft":
+            case "showmodal":
+                var boolVal = RequireBoolean(formKey, normalizedPropertyName, value);
+                if (normalizedPropertyName.Equals("showmodal", StringComparison.OrdinalIgnoreCase))
+                {
+                    props["ShowModal"] = boolVal;
+                }
+                else
+                {
+                    SetFormBooleanPropertyBit(props, normalizedPropertyName, boolVal);
+                }
                 break;
             case "formborderstyle":
             case "formmousepointer":
@@ -1669,11 +1741,11 @@ internal static class RebuildPatchApplier
             case "formspecialeffect":
             case "formpicturealignment":
             case "formpicturesizemode":
-                props[CanonicalPropertyName(propertyName)] = RequireUInt16(formKey, propertyName, value);
+                props[CanonicalPropertyName(normalizedPropertyName)] = RequireUInt16(formKey, normalizedPropertyName, value);
                 break;
             case "formzoom":
             case "nextavailableid":
-                props[CanonicalPropertyName(propertyName)] = RequireUInt32(formKey, propertyName, value);
+                props[CanonicalPropertyName(normalizedPropertyName)] = RequireUInt32(formKey, normalizedPropertyName, value);
                 break;
             case "displayedwidth":
             case "displayedheight":
@@ -1681,20 +1753,28 @@ internal static class RebuildPatchApplier
             case "logicalheight":
             case "scrollleft":
             case "scrolltop":
-                props[CanonicalPropertyName(propertyName)] = RequireInt32(formKey, propertyName, value);
+                props[CanonicalPropertyName(normalizedPropertyName)] = RequireInt32(formKey, normalizedPropertyName, value);
                 break;
             case "displayedwidthpt":
             case "displayedheightpt":
             case "logicalwidthpt":
             case "logicalheightpt":
+            case "left":
+            case "top":
+            case "clientleft":
+            case "clienttop":
                 if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var doubleVal))
                 {
-                    props[CanonicalPropertyName(propertyName)] = doubleVal;
+                    props[CanonicalPropertyName(normalizedPropertyName)] = doubleVal;
                 }
                 else
                 {
-                    throw new CliException($"Property '{propertyName}' for '{formKey}' must be a number.");
+                    throw new CliException($"Property '{normalizedPropertyName}' for '{formKey}' must be a number.");
                 }
+                break;
+            case "startupposition":
+            case "drawbuffer":
+                props[CanonicalPropertyName(normalizedPropertyName)] = RequireInt32(formKey, normalizedPropertyName, value);
                 break;
             default:
                 break;

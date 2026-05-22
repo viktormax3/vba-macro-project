@@ -20,6 +20,16 @@ internal sealed class PatchDocument
         {
             var controlName = pair.Key;
             var props = pair.Value;
+            var isForm = string.Equals(controlName, "UserForm", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(controlName, "Form", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(controlName, "root", StringComparison.OrdinalIgnoreCase) ||
+                         (props.ContainsKey("displayedWidth") || props.ContainsKey("clientWidth")); // heuristic if formName isn't known
+            
+            if (isForm)
+            {
+                continue;
+            }
+
             var layoutPatch = new LayoutPatch();
             bool hasLayout = false;
 
