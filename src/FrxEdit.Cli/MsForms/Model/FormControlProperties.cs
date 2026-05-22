@@ -7,4 +7,8 @@ internal sealed record FormControlProperties(
     int? LogicalWidth,
     int? LogicalHeight,
     int? LogicalWidthOffset,
-    int? LogicalHeightOffset);
+    int? LogicalHeightOffset,
+    int? ScrollLeft,
+    int? ScrollTop,
+    int? ScrollLeftOffset,
+    int? ScrollTopOffset);

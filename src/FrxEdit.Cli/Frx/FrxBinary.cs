@@ -547,6 +547,16 @@ internal sealed class FrxBinary
             properties["logicalHeightPt"] = ToPoints(formControl.LogicalHeight);
         }
 
+        if (formControl.ScrollLeft is not null)
+        {
+            properties["scrollLeftPt"] = ToPoints(formControl.ScrollLeft);
+        }
+
+        if (formControl.ScrollTop is not null)
+        {
+            properties["scrollTopPt"] = ToPoints(formControl.ScrollTop);
+        }
+
         return properties;
     }
 

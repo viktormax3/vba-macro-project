@@ -20,7 +20,8 @@ internal static class PatchDocumentGenerator
         "boundColumn", "textColumn", "columnCount", "listRows", "matchEntry", "listStyle",
         "showDropButtonWhen", "dropButtonStyle", "multiSelect", "columnHeads", "matchRequired",
         "editable", "mousePointer", "picturePosition", "min", "max", "position", "smallChange",
-        "largeChange", "orientation"
+        "largeChange", "orientation", "logicalWidth", "logicalHeight", "scrollLeft", "scrollTop",
+        "logicalWidthPt", "logicalHeightPt", "scrollLeftPt", "scrollTopPt"
     ];
 
     private static readonly HashSet<string> RootFormPropertyNames = new(StringComparer.OrdinalIgnoreCase)
@@ -29,9 +30,9 @@ internal static class PatchDocumentGenerator
         "formMousePointer", "formScrollBars", "formCycle", "formSpecialEffect", "formPictureAlignment",
         "formPictureSizeMode", "formZoom", "nextAvailableId", "displayedWidth", "displayedHeight",
         "displayedWidthPt", "displayedHeightPt", "logicalWidth", "logicalHeight", "logicalWidthPt",
-        "logicalHeightPt", "scrollLeft", "scrollTop", "formBooleanProperties",
+        "logicalHeightPt", "scrollLeft", "scrollTop", "scrollLeftPt", "scrollTopPt", "formBooleanProperties",
         "StartUpPosition", "ShowModal", "Tag", "Left", "Top", "Width", "Height", "ClientLeft", "ClientTop", "ClientWidth", "ClientHeight",
-        "DrawBuffer"
+        "DrawBuffer", "WhatsThisButton", "WhatsThisHelp"
     };
 
     private static string CanonicalizeRootFormPropertyName(string name)
@@ -348,6 +349,8 @@ internal static class PatchDocumentGenerator
             "showdropbuttonwhen" or "dropbuttonstyle" or "multiselect" or "columnheads" or
             "matchrequired" or "editable" or "displaystyle" or "caption" or "groupname" or
             "pictureposition" or "accelerator" or "alignment" or "tabindex" or "tabstop" or "visible" or
+            "scrollleft" or "scrolltop" or "logicalwidth" or "logicalheight" or
+            "scrollleftpt" or "scrolltoppt" or "logicalwidthpt" or "logicalheightpt" or
             "leftpt" or "toppt" or "widthpt" or "heightpt";
     }
 }

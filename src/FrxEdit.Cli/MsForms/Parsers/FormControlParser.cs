@@ -102,6 +102,10 @@ internal static class FormControlParser
         int? logicalHeight = null;
         int? logicalWidthOffset = null;
         int? logicalHeightOffset = null;
+        int? scrollLeft = null;
+        int? scrollTop = null;
+        int? scrollLeftOffset = null;
+        int? scrollTopOffset = null;
 
         try
         {
@@ -139,11 +143,15 @@ internal static class FormControlParser
             if (Has(propMask, 12))
             {
                 EnsureAvailable(cursor, 8, blockEnd);
-                result["scrollLeftOffset"] = OffsetAt(fileOffsets, cursor);
-                result["scrollLeft"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+                scrollLeftOffset = OffsetAt(fileOffsets, cursor);
+                result["scrollLeftOffset"] = scrollLeftOffset;
+                scrollLeft = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+                result["scrollLeft"] = scrollLeft;
                 cursor += 4;
-                result["scrollTopOffset"] = OffsetAt(fileOffsets, cursor);
-                result["scrollTop"] = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+                scrollTopOffset = OffsetAt(fileOffsets, cursor);
+                result["scrollTopOffset"] = scrollTopOffset;
+                scrollTop = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(cursor, 4));
+                result["scrollTop"] = scrollTop;
                 cursor += 4;
             }
 
@@ -173,7 +181,11 @@ internal static class FormControlParser
             logicalWidth,
             logicalHeight,
             logicalWidthOffset,
-            logicalHeightOffset);
+            logicalHeightOffset,
+            scrollLeft,
+            scrollTop,
+            scrollLeftOffset,
+            scrollTopOffset);
         return true;
     }
 
