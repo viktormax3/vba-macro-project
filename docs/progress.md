@@ -22,9 +22,10 @@
 - `MsForms/Factories/GeneratedControlFactory` can now add `CommandButton`, `Label`, `TextBox`, `ComboBox`, `ListBox`, `CheckBox`, `OptionButton`, `ToggleButton`, `Image`, `ScrollBar`, `SpinButton`, and standalone `TabStrip` without `fromTemplate`.
 - Factory generation is now schema-driven per control type instead of one generic byte builder.
 - `Label` generation now uses label-specific site flags and masks (`siteBitFlags 0x32`, `LabelPropMask 0x28`, `TextPropsPropMask 0x35`) to avoid button-like/default-noise payloads.
-- `TextBox` generation now uses fixture-aligned editable `VariousPropertyBits 0x2C80481B`.
-- `ComboBox` and `ListBox` generation now uses fixture-aligned MorphData list baselines without `MorphDataColumnInfo`.
-- `CheckBox`, `OptionButton`, and `ToggleButton` generation now uses fixture-aligned MorphData caption/value baselines with display styles `4`, `5`, and `6`.
+- `TextBox` generation now uses fixture-aligned editable `VariousPropertyBits 0x2C80481B`; its rebuilt MorphData writer can promote/remove TextBox colors, borders, scrollbars, password char, max length, and high-level text-editing behavior bits, while `textAlign` is emitted through documented TextProps paragraph alignment.
+- `ComboBox` and `ListBox` generation now uses fixture-aligned MorphData list baselines without `MorphDataColumnInfo`; the rebuilt list path can promote/remove common colors, borders, list enums, list geometry metadata, and supported list behavior bits, while `textAlign` is emitted through documented TextProps paragraph alignment.
+- `CheckBox` and `OptionButton` now have rebuilt MorphData writers for caption/value/group name, colors, text props, accelerator, special effect, mouse pointer, alignment, and supported `VariousPropertyBits`; generated sites can emit/edit `ControlSource`, `Alignment` is exposed with native property-grid values even though its persisted bit is inverted, and tri-state persistence is documented as MorphData `Value` rather than a phantom binary field.
+- `ToggleButton` generation still uses the fixture-aligned MorphData caption/value baseline with display style `6`.
 - `Image` generation now supports a no-picture baseline; binary picture StreamData remains a dedicated follow-up.
 - `SpinButton` and `ScrollBar` generation now supports baseline orientation plus size payloads.
 - `TabStrip` generation now supports a standalone two-or-more-tab baseline with `ArrayString` tab captions/names and visible+enabled tab flags.
@@ -37,6 +38,7 @@
 - `frxedit create` now generates a `.frm/.frx` pair from zero with a strict-parseable empty UserForm, and can immediately apply a full-patch add document.
 - Built-in `CompObj` baselines are available for Form/Page, Frame, and MultiPage so generated containers no longer depend on source fixture CompObj streams.
 - Strict validation now checks root/container storage CLSIDs and required `CompObj` streams, catching OLE storage defects that can pass parser-only validation but fail in the native designer.
+- Strict validation now rejects MorphData PropMask high bits reserved by `[MS-OFORMS]`; a native-import failure found in full TextBox/ComboBox/ListBox tests was caused by persisting `textAlign` in those reserved bits instead of TextProps.
 - Empty native-style Frame storages now omit internal `FormSiteData` until the first child is added; the rebuilder can append the first child `FormSiteData` block later.
 - When an empty generated Frame receives its first child, the rebuilder now promotes its `FormControl` to the native child-bearing Frame shape (`0x0C1A0C48`, `nextAvailableId`, `shapeCookie`) and removes the empty-frame font padding before `FormSiteData`.
 - When an empty generated Page receives its first child, the rebuilder now appends the native 16-byte Page tail after `FormSiteData`, matching native MultiPage pages that contain controls.

@@ -99,6 +99,26 @@ Latest create-from-zero acceptance:
 - generated `MultiNuevo` has `multiPageXStreamValidation: exact` and pages `PageUno`/`PageDos`.
 - strict raw output includes root storage CLSID plus `CompObj`, and owned storage CLSID plus `CompObj` for generated `Frame`, `MultiPage`, and `Page` storages.
 
+Latest TextBox property acceptance:
+
+- `examples/textbox-full.patch.json` creates a TextBox with explicit MorphData colors, border fields, scrollbars, password char, max length, mouse pointer, and behavior bits; public `textAlign` is stored in documented TextProps paragraph alignment.
+- `examples/textbox-edit.patch.json` rebuilds that TextBox back across default and non-default values; strict validation passes and the rebuild report keeps `semanticMatch: true`.
+- Human inspect now reports absent TextBox defaults as `source: default`, so payload minimization remains visible without pretending default bytes were persisted.
+
+Latest ComboBox/ListBox property acceptance:
+
+- `examples/combo-list-full.patch.json` creates a ComboBox/ListBox pair with explicit MorphData list enums, colors, border fields, and supported behavior bits; public `textAlign` is stored in documented TextProps paragraph alignment.
+- `examples/combo-list-edit.patch.json` drives the same controls back across fixture/default values; strict validation passes and the rebuild report keeps `semanticMatch: true`.
+- Row data, `RowSource`/`ControlSource`, and non-default `MorphDataColumnInfo` arrays remain a separate list-data pass instead of being guessed by the leaf-control property writer.
+- Strict inspect rejects MorphData PropMask high bits reserved by `[MS-OFORMS]`; an earlier TextBox/ComboBox/ListBox full fixture wrote `textAlign` into that unused area and passed parser-only checks while native Corel/Office import rejected the OLE blob.
+
+Latest CheckBox/OptionButton property acceptance:
+
+- `examples/check-option-full.patch.json` creates a CheckBox/OptionButton pair with caption/value/group name, ControlSource site strings, colors, font/TextProps alignment, accelerator, special effect, mouse pointer, native-grid `Alignment`, and supported `VariousPropertyBits`.
+- `examples/check-option-edit.patch.json` rebuilds the pair back across defaults and short/changed strings with strict validation and `semanticMatch: true`.
+- CheckBox/OptionButton `Alignment` is emitted through the inverted persisted bit described by `[MS-OFORMS]`, but public JSON keeps the native designer values: `0` left, `1` right.
+- Their ternary state stays in MorphData `Value`: `"0"` cleared, `"1"` selected, any other string indeterminate. The spec does not define a separate persisted `TripleState` field.
+
 Latest torture regression:
 
 - `examples/create-torture-stage1.patch.json` creates root controls plus empty generated containers.

@@ -51,7 +51,7 @@ internal sealed record RebuildComparison(
 
         foreach (var propertyName in new[]
                  {
-                     "caption", "value", "tag", "controlTipText", "backColor", "foreColor", "borderColor",
+                     "caption", "value", "tag", "controlTipText", "controlSource", "backColor", "foreColor", "borderColor",
                      "fontName", "fontSize", "tabIndex", "parser", "sizeSource"
                  })
         {
@@ -87,6 +87,14 @@ internal sealed record RebuildComparison(
             ("TextBox", "backColor") => "&H80000005&",
             ("TextBox", "foreColor") => "&H80000008&",
             ("TextBox", "borderColor") => "&H80000006&",
+            ("ComboBox", "value") => string.Empty,
+            ("ComboBox", "backColor") => "&H80000005&",
+            ("ComboBox", "foreColor") => "&H80000008&",
+            ("ComboBox", "borderColor") => "&H80000006&",
+            ("ListBox", "value") => string.Empty,
+            ("ListBox", "backColor") => "&H80000005&",
+            ("ListBox", "foreColor") => "&H80000008&",
+            ("ListBox", "borderColor") => "&H80000006&",
             _ => null
         };
     }

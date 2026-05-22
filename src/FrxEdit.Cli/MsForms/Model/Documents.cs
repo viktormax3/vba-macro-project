@@ -19,6 +19,7 @@ internal sealed record HumanLayoutDocument(
         "value",
         "tag",
         "controlTipText",
+        "controlSource",
         "accelerator",
         "textAlign",
         "paragraphAlign",
@@ -39,6 +40,8 @@ internal sealed record HumanLayoutDocument(
         "tabStop",
         "default",
         "cancel",
+        "backStyle",
+        "alignment",
         "wordWrap",
         "autoSize",
         "autoTab",
@@ -59,6 +62,19 @@ internal sealed record HumanLayoutDocument(
         "specialEffect",
         "borderStyle",
         "displayStyle",
+        "listWidth",
+        "boundColumn",
+        "textColumn",
+        "columnCount",
+        "listRows",
+        "matchEntry",
+        "listStyle",
+        "showDropButtonWhen",
+        "dropButtonStyle",
+        "multiSelect",
+        "columnHeads",
+        "matchRequired",
+        "editable",
         "mousePointer",
         "picturePosition",
         "min",
@@ -180,6 +196,62 @@ internal sealed record HumanLayoutDocument(
             AddDefault(values, sources, "fontName", "Tahoma");
             AddDefault(values, sources, "fontSize", 8);
         }
+
+        if (controlType.Equals("ComboBox", StringComparison.OrdinalIgnoreCase) ||
+            controlType.Equals("ListBox", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDefault(values, sources, "backColor", "&H80000005&");
+            AddDefault(values, sources, "foreColor", "&H80000008&");
+            AddDefault(values, sources, "borderColor", "&H80000006&");
+            AddDefault(values, sources, "borderStyle", 1);
+            AddDefault(values, sources, "specialEffect", 2);
+            AddDefault(values, sources, "boundColumn", 1);
+            AddDefault(values, sources, "textColumn", -1);
+            AddDefault(values, sources, "columnCount", 1);
+            AddDefault(values, sources, "listWidth", 0);
+            AddDefault(values, sources, "listStyle", 0);
+            AddDefault(values, sources, "matchEntry", 2);
+            AddDefault(values, sources, "textAlign", "left");
+            AddDefault(values, sources, "fontName", "Tahoma");
+            AddDefault(values, sources, "fontSize", 8);
+        }
+
+        if (controlType.Equals("ComboBox", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDefault(values, sources, "listRows", 8);
+            AddDefault(values, sources, "dropButtonStyle", 1);
+            AddDefault(values, sources, "showDropButtonWhen", 0);
+            AddDefault(values, sources, "maxLength", 0);
+        }
+
+        if (controlType.Equals("ListBox", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDefault(values, sources, "multiSelect", 0);
+            AddDefault(values, sources, "scrollBars", 3);
+        }
+
+        if (controlType.Equals("CheckBox", StringComparison.OrdinalIgnoreCase) ||
+            controlType.Equals("OptionButton", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDefault(values, sources, "value", "0");
+            AddDefault(values, sources, "backColor", "&H8000000F&");
+            AddDefault(values, sources, "foreColor", "&H80000008&");
+            AddDefault(values, sources, "enabled", true);
+            AddDefault(values, sources, "visible", true);
+            AddDefault(values, sources, "locked", false);
+            AddDefault(values, sources, "tabStop", true);
+            AddDefault(values, sources, "backStyle", 1);
+            AddDefault(values, sources, "alignment", 1);
+            AddDefault(values, sources, "wordWrap", true);
+            AddDefault(values, sources, "autoSize", false);
+            AddDefault(values, sources, "imeMode", 0);
+            AddDefault(values, sources, "picturePosition", 458753);
+            AddDefault(values, sources, "specialEffect", 0);
+            AddDefault(values, sources, "multiSelect", 0);
+            AddDefault(values, sources, "textAlign", "left");
+            AddDefault(values, sources, "fontName", "Tahoma");
+            AddDefault(values, sources, "fontSize", 8);
+        }
     }
 
     private static void AddDefault(
@@ -204,14 +276,14 @@ internal sealed record HumanLayoutDocument(
             return false;
         }
 
-        if (IsRebuiltTextBoxProperty(name, properties))
+        if (IsRebuiltMorphProperty(name, properties))
         {
             return true;
         }
 
         return name.ToLowerInvariant() switch
         {
-            "caption" or "tag" or "controltiptext" or "fontname" or "value" or "groupname" =>
+            "caption" or "tag" or "controltiptext" or "controlsource" or "fontname" or "value" or "groupname" =>
                 properties.ContainsKey($"{name}Span") || properties.ContainsKey($"{name}Offset"),
             "backcolor" or "forecolor" or "fontsize" or "bordercolor" =>
                 properties.ContainsKey($"{name}Offset"),
@@ -221,12 +293,26 @@ internal sealed record HumanLayoutDocument(
         };
     }
 
-    private static bool IsRebuiltTextBoxProperty(string name, Dictionary<string, object?> properties)
+    private static bool IsRebuiltMorphProperty(string name, Dictionary<string, object?> properties)
     {
         if (!properties.TryGetValue("controlType", out var controlType) ||
-            !string.Equals(controlType?.ToString(), "TextBox", StringComparison.OrdinalIgnoreCase))
+            (!string.Equals(controlType?.ToString(), "TextBox", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(controlType?.ToString(), "ComboBox", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(controlType?.ToString(), "ListBox", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(controlType?.ToString(), "CheckBox", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(controlType?.ToString(), "OptionButton", StringComparison.OrdinalIgnoreCase)))
         {
             return false;
+        }
+
+        if (string.Equals(controlType?.ToString(), "CheckBox", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(controlType?.ToString(), "OptionButton", StringComparison.OrdinalIgnoreCase))
+        {
+            return name.ToLowerInvariant() is
+                "caption" or "value" or "groupname" or "fontname" or "fontsize" or "backcolor" or
+                "forecolor" or "enabled" or "locked" or "backstyle" or "alignment" or "wordwrap" or
+                "autosize" or "imemode" or "specialeffect" or "mousepointer" or "pictureposition" or
+                "accelerator" or "textalign";
         }
 
         return name.ToLowerInvariant() is
@@ -235,7 +321,11 @@ internal sealed record HumanLayoutDocument(
             "dragbehavior" or "enterfieldbehavior" or "enterkeybehavior" or "hideselection" or
             "integralheight" or "multiline" or "selectionmargin" or "tabkeybehavior" or "wordwrap" or
             "imemode" or "maxlength" or "passwordchar" or "scrollbars" or "borderstyle" or
-            "specialeffect" or "mousepointer" or "textalign";
+            "specialeffect" or "mousepointer" or "textalign" or "listwidth" or "boundcolumn" or
+            "textcolumn" or "columncount" or "listrows" or "matchentry" or "liststyle" or
+            "showdropbuttonwhen" or "dropbuttonstyle" or "multiselect" or "columnheads" or
+            "matchrequired" or "editable" or "displaystyle" or "caption" or "groupname" or
+            "pictureposition" or "accelerator" or "alignment";
     }
 }
 

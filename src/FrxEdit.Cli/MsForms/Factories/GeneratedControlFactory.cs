@@ -73,7 +73,8 @@ internal static class GeneratedControlFactory
             left,
             top,
             objectPayload.Length,
-            BuildSiteFlags(schema.SiteFlags, properties));
+            BuildSiteFlags(schema.SiteFlags, properties),
+            properties);
 
         return new GeneratedControlBytes(sitePayload, objectPayload, schema.BuildMetadata(request, objectPayload.Length));
     }

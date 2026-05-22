@@ -87,6 +87,24 @@ internal static class ObjectPayloadSerializer
             return SerializeTextBoxRebuilt(control, original);
         }
 
+        if ((control.Type.Equals("ComboBox", StringComparison.OrdinalIgnoreCase) ||
+             control.Type.Equals("ListBox", StringComparison.OrdinalIgnoreCase)) &&
+            control.Properties is not null &&
+            TryGetString(control.Properties, "parser", out var morphListParser) &&
+            morphListParser.Equals("msOFormsMorphData", StringComparison.OrdinalIgnoreCase))
+        {
+            return SerializeMorphListRebuilt(control);
+        }
+
+        if ((control.Type.Equals("CheckBox", StringComparison.OrdinalIgnoreCase) ||
+             control.Type.Equals("OptionButton", StringComparison.OrdinalIgnoreCase)) &&
+            control.Properties is not null &&
+            TryGetString(control.Properties, "parser", out var morphButtonParser) &&
+            morphButtonParser.Equals("msOFormsMorphData", StringComparison.OrdinalIgnoreCase))
+        {
+            return SerializeMorphButtonRebuilt(control);
+        }
+
         return SerializeVariableStrings(control, original, allowGrowth: true);
     }
 
@@ -421,7 +439,6 @@ internal static class ObjectPayloadSerializer
         const uint defaultVarious = 0x2C80_481B;
         const int defaultBorderStyle = 1;
         const int defaultSpecialEffect = 2;
-        const int defaultTextAlign = 1;
 
         var value = TryGetString(props, "value", out var valueText) ? valueText : string.Empty;
         var valueBytes = Encoding.Latin1.GetBytes(value);
@@ -443,12 +460,6 @@ internal static class ObjectPayloadSerializer
         var mousePointer = TryGetInt(props, "mousePointer", out var mousePointerRaw) ? mousePointerRaw : 0;
         var passwordChar = TryGetString(props, "passwordChar", out var passwordCharText) ? passwordCharText : string.Empty;
         var specialEffect = TryGetInt(props, "specialEffect", out var specialEffectRaw) ? specialEffectRaw : defaultSpecialEffect;
-        var textAlign = TryGetInt(props, "textAlignRaw", out var textAlignRaw)
-            ? textAlignRaw
-            : TryGetString(props, "textAlign", out var textAlignText) &&
-              TextPropsFactory.TryParseTextAlign(textAlignText, out var parsedTextAlign)
-                ? parsedTextAlign
-                : defaultTextAlign;
 
         ulong propMask = 0x0000_0000_8000_0101ul;
         if (backColor != defaultBackColor) propMask |= 1ul << 1;
@@ -461,7 +472,6 @@ internal static class ObjectPayloadSerializer
         if (valueBytes.Length > 0) propMask |= 1ul << 22;
         if (borderColor != defaultBorderColor) propMask |= 1ul << 25;
         if (specialEffect != defaultSpecialEffect) propMask |= 1ul << 26;
-        if (textAlign != defaultTextAlign) propMask |= 1ul << 33;
 
         if (TryGetString(props, "propMask", out var oldMaskText) && TryParseHexUInt64(oldMaskText, out var oldMask))
         {
@@ -490,7 +500,6 @@ internal static class ObjectPayloadSerializer
         if ((propMask & (1ul << 26)) != 0) WriteUInt32(dataBlock, unchecked((uint)specialEffect));
         if ((propMask & (1ul << 27)) != 0) WriteUInt16(dataBlock, 0xFFFF);
         if ((propMask & (1ul << 28)) != 0) WriteUInt16(dataBlock, 0xFFFF);
-        if ((propMask & (1ul << 33)) != 0) dataBlock.WriteByte(checked((byte)textAlign));
         WritePadding(dataBlock, 4);
 
         using var extra = new MemoryStream();
@@ -505,7 +514,10 @@ internal static class ObjectPayloadSerializer
         var textPropValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
         if (TryGetString(props, "fontName", out var fontName)) textPropValues["fontName"] = fontName;
         if (props.TryGetValue("fontSize", out var fontSize) && fontSize is not null) textPropValues["fontSize"] = fontSize;
-        var textProps = TextPropsFactory.Build(textPropValues, TextPropsFactory.StandardMask);
+        if (props.TryGetValue("paragraphAlign", out var paragraphAlign) && paragraphAlign is not null) textPropValues["paragraphAlign"] = paragraphAlign;
+        if (props.TryGetValue("textAlign", out var textAlign) && textAlign is not null) textPropValues["textAlign"] = textAlign;
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, textPropValues);
+        var textProps = TextPropsFactory.Build(textPropValues, textPropsMask);
 
         var existingStreamData = Array.Empty<byte>();
         if (TryGetInt(props, "morphDataStreamDataLocalOffset", out var streamDataStart) &&
@@ -524,6 +536,48 @@ internal static class ObjectPayloadSerializer
         output.Write(existingStreamData);
         output.Write(textProps);
         return output.ToArray();
+    }
+
+    private static byte[] SerializeMorphListRebuilt(ControlInfo control)
+    {
+        var props = control.Properties!;
+        IGeneratedControlSchema schema = control.Type.Equals("ComboBox", StringComparison.OrdinalIgnoreCase)
+            ? new ComboBoxControlSchema()
+            : new ListBoxControlSchema();
+        var request = new GeneratedControlRequest(
+            control.Type,
+            control.Name,
+            SiteId: 0,
+            TabIndex: TryGetInt(props, "tabIndex", out var tabIndex) ? tabIndex : 0,
+            Left: control.Left ?? 0,
+            Top: control.Top ?? 0,
+            Width: control.RawWidth ?? 0,
+            Height: control.RawHeight ?? 0,
+            Caption: null,
+            Value: TryGetString(props, "value", out var value) ? value : null,
+            Properties: props);
+        return schema.BuildObjectPayload(request);
+    }
+
+    private static byte[] SerializeMorphButtonRebuilt(ControlInfo control)
+    {
+        var props = control.Properties!;
+        IGeneratedControlSchema schema = control.Type.Equals("CheckBox", StringComparison.OrdinalIgnoreCase)
+            ? new CheckBoxControlSchema()
+            : new OptionButtonControlSchema();
+        var request = new GeneratedControlRequest(
+            control.Type,
+            control.Name,
+            SiteId: 0,
+            TabIndex: TryGetInt(props, "tabIndex", out var tabIndex) ? tabIndex : 0,
+            Left: control.Left ?? 0,
+            Top: control.Top ?? 0,
+            Width: control.RawWidth ?? 0,
+            Height: control.RawHeight ?? 0,
+            Caption: TryGetString(props, "caption", out var caption) ? caption : control.Name,
+            Value: TryGetString(props, "value", out var value) ? value : "0",
+            Properties: props);
+        return schema.BuildObjectPayload(request);
     }
 
     private static void SerializeTextualControl(ControlInfo control, Dictionary<string, object?> props, byte[] output, IReadOnlyList<string> names)

@@ -221,7 +221,8 @@ internal static class MsFormsBinary
         properties["columnHeads"] = HasBit(value, 10);
         properties["integralHeight"] = HasBit(value, 11);
         properties["matchRequired"] = HasBit(value, 12);
-        properties["alignment"] = HasBit(value, 13) ? 1 : 0;
+        // Office displays Alignment as 0=Left and 1=Right, while the persisted bit is inverted.
+        properties["alignment"] = HasBit(value, 13) ? 0 : 1;
         properties["editable"] = HasBit(value, 14);
         properties["imeMode"] = (int)((value >> 15) & 0x0F);
         properties["dragBehavior"] = HasBit(value, 19) ? 1 : 0;

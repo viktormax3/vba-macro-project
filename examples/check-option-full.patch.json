@@ -1,0 +1,62 @@
+{
+  "add": [
+    {
+      "type": "CheckBox",
+      "name": "ChkFull",
+      "leftPt": 18,
+      "topPt": 18,
+      "widthPt": 132,
+      "heightPt": 24,
+      "caption": "Check full",
+      "value": "1",
+      "properties": {
+        "fontName": "Times New Roman",
+        "fontSize": 12,
+        "backColor": "&H00E8F0FF&",
+        "foreColor": "&H00000066&",
+        "enabled": false,
+        "locked": true,
+        "backStyle": 0,
+        "alignment": 0,
+        "wordWrap": false,
+        "autoSize": true,
+        "imeMode": 1,
+        "mousePointer": 1,
+        "specialEffect": 1,
+        "accelerator": "C",
+        "controlSource": "Sheet1!A1",
+        "groupName": "FullGroup",
+        "textAlign": "center"
+      }
+    },
+    {
+      "type": "OptionButton",
+      "name": "OptFull",
+      "leftPt": 18,
+      "topPt": 52,
+      "widthPt": 132,
+      "heightPt": 24,
+      "caption": "Option full",
+      "value": "1",
+      "properties": {
+        "fontName": "Verdana",
+        "fontSize": 10,
+        "backColor": "&H00F4FFF0&",
+        "foreColor": "&H00003300&",
+        "enabled": false,
+        "locked": true,
+        "backStyle": 0,
+        "alignment": 0,
+        "wordWrap": false,
+        "autoSize": true,
+        "imeMode": 2,
+        "mousePointer": 14,
+        "specialEffect": 1,
+        "accelerator": "O",
+        "controlSource": "Sheet1!A2",
+        "groupName": "FullGroup",
+        "textAlign": "right"
+      }
+    }
+  ]
+}

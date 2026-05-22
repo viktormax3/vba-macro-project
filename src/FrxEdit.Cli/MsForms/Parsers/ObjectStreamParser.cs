@@ -881,10 +881,17 @@ internal static class ObjectStreamParser
             ["propMask"] = $"0x{propMask:X16}",
         };
 
+        const ulong morphDataUnusedHighBits = 0xFFFF_FFFE_0000_0000ul;
+        if ((propMask & morphDataUnusedHighBits) != 0)
+        {
+            properties["morphDataPropMaskWarning"] =
+                $"MorphData PropMask reserved high bits must be zero; found 0x{propMask & morphDataUnusedHighBits:X16}.";
+        }
+
         if (MsFormsBinary.HasBit64(propMask, 0))
         {
             var value = MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "variousPropertyBitsRaw", properties);
-            AddVariousPropertyBits(properties, value);
+            AddVariousPropertyBits(properties, value, controlType);
         }
 
         if (MsFormsBinary.HasBit64(propMask, 1)) MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "backColor", properties, true);
@@ -961,13 +968,6 @@ internal static class ObjectStreamParser
             groupNameCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "groupNameCount", properties));
             groupNameCountLocalOffset = LocalOffsetOf(properties, "groupNameCount");
         }
-        if (MsFormsBinary.HasBit64(propMask, 33))
-        {
-            var textAlign = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "textAlignRaw", properties);
-            properties["textAlign"] = TextPropsFactory.TextAlignName(textAlign);
-        }
-        if (MsFormsBinary.HasBit64(propMask, 34)) properties["dropEffect"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "dropEffect", properties);
-
         int? width = null;
         int? height = null;
         int? widthOffset = null;
@@ -1341,7 +1341,37 @@ internal static class ObjectStreamParser
             : -1;
     }
 
-    private static void AddVariousPropertyBits(Dictionary<string, object?> properties, uint value) => MsFormsBinary.AddVariousPropertyBits(properties, value);
+    private static void AddVariousPropertyBits(Dictionary<string, object?> properties, uint value, string? controlType = null)
+    {
+        MsFormsBinary.AddVariousPropertyBits(properties, value);
+        if (controlType is null)
+        {
+            return;
+        }
+
+        if (controlType.Equals("CheckBox", StringComparison.OrdinalIgnoreCase) ||
+            controlType.Equals("OptionButton", StringComparison.OrdinalIgnoreCase))
+        {
+            RemoveVariousProperties(properties,
+                "columnHeads",
+                "matchRequired",
+                "editable",
+                "dragBehavior",
+                "enterKeyBehavior",
+                "enterFieldBehavior",
+                "tabKeyBehavior",
+                "autoTab",
+                "multiLine");
+        }
+    }
+
+    private static void RemoveVariousProperties(Dictionary<string, object?> properties, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            properties.Remove(name);
+        }
+    }
 
     private static IReadOnlyList<SystemColorValue> FindSystemColors(byte[] data, int[] fileOffsets)
     {

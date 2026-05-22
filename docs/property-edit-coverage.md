@@ -18,10 +18,10 @@ tracks what `frxedit` can create, parse, and safely edit today.
 | CommandButton | yes | yes | caption, fontName, fontSize/fontHeight, foreColor, backColor, enabled, locked, backStyle, wordWrap, autoSize, imeMode, picturePosition, mousePointer, accelerator, takeFocusOnClick, tabStop, visible, default, cancel, size/layout, tabIndex/site fields | picture/mouse icon binary payload |
 | Label | yes | yes | caption, fontName, fontSize/fontHeight, textAlign/paragraphAlign, foreColor, backColor, borderColor, enabled, backStyle, wordWrap, autoSize, imeMode, picturePosition, mousePointer, borderStyle, specialEffect, accelerator, size/layout, tabIndex/site fields | picture/mouse icon binary payload |
 | TextBox | yes | yes | value, fontName, fontSize/fontHeight, foreColor, backColor, borderColor, enabled, locked, backStyle, autoSize, autoTab, autoWordSelect, dragBehavior, enterFieldBehavior, enterKeyBehavior, hideSelection, integralHeight, multiLine, selectionMargin, tabKeyBehavior, wordWrap, imeMode, maxLength, passwordChar, scrollBars, borderStyle, specialEffect, mousePointer, textAlign, size/layout, tabIndex/site fields | mouse icon binary payload |
-| ComboBox | yes | yes | fontName, fontSize/fontHeight, colors when present, `variousPropertyBitsRaw`, size/layout, tabIndex/site fields | rows/list data, column info, high-level enum/bitfield setters |
-| ListBox | yes | yes | fontName, fontSize/fontHeight, colors when present, size/layout, tabIndex/site fields | rows/list data, column info, high-level enum/bitfield setters |
-| CheckBox | yes | yes | caption, value, fontName, fontSize/fontHeight, foreColor/backColor, `variousPropertyBitsRaw`, size/layout, tabIndex/site fields | high-level TripleState/WordWrap/Alignment setters |
-| OptionButton | yes | yes | caption, value, fontName, fontSize/fontHeight, foreColor/backColor, `variousPropertyBitsRaw`, size/layout, tabIndex/site fields | high-level group/value/bitfield helpers |
+| ComboBox | yes | yes | value, fontName, fontSize/fontHeight, foreColor, backColor, borderColor, enabled, locked, backStyle, columnHeads, integralHeight, matchRequired, editable, dragBehavior, enterFieldBehavior, selectionMargin, autoWordSelect, autoSize, hideSelection, autoTab, imeMode, maxLength, borderStyle, specialEffect, mousePointer, displayStyle, listWidth, boundColumn, textColumn, columnCount, listRows, matchEntry, listStyle, showDropButtonWhen, dropButtonStyle, textAlign, size/layout, tabIndex/site fields | rows/list data, RowSource/ControlSource site strings, non-default column info arrays, mouse icon |
+| ListBox | yes | yes | fontName, fontSize/fontHeight, foreColor, backColor, borderColor, enabled, locked, backStyle, columnHeads, integralHeight, selectionMargin, autoWordSelect, hideSelection, imeMode, borderStyle, specialEffect, mousePointer, displayStyle, listWidth, boundColumn, textColumn, columnCount, matchEntry, listStyle, multiSelect, textAlign, size/layout, tabIndex/site fields | rows/list data, RowSource/ControlSource site strings, non-default column info arrays, mouse icon |
+| CheckBox | yes | yes | caption, value/tri-state value string, groupName, controlSource on generated/existing explicit sites, fontName, fontSize/fontHeight, foreColor, backColor, enabled, locked, backStyle, alignment, wordWrap, autoSize, imeMode, picturePosition, mousePointer, specialEffect, accelerator, textAlign, size/layout, tabIndex/site fields | picture/mouse icon binary payload |
+| OptionButton | yes | yes | caption, value/tri-state value string, groupName, controlSource on generated/existing explicit sites, fontName, fontSize/fontHeight, foreColor, backColor, enabled, locked, backStyle, alignment, wordWrap, autoSize, imeMode, picturePosition, mousePointer, specialEffect, accelerator, textAlign, size/layout, tabIndex/site fields | picture/mouse icon binary payload |
 | ToggleButton | yes | yes | caption, value, fontName, fontSize/fontHeight, foreColor/backColor, `variousPropertyBitsRaw`, size/layout, tabIndex/site fields | high-level toggle/button bitfield helpers |
 | Image | yes, no picture | yes | size/layout, tabIndex/site fields, colors when present | picture payload, mouse icon, picture alignment/tiling setters |
 | ScrollBar | yes | yes | orientation, size/layout, tabIndex/site fields, colors when present | min/max/value/smallChange/largeChange high-level setters |
@@ -37,8 +37,8 @@ The current public writer accepts a deliberately small set of property names:
 
 | Patch area | Supported names |
 | --- | --- |
-| `properties` object payload | `caption`, `value`, `groupName`, `fontName`, `fontSize`, `backColor`, `foreColor`, `borderColor`, `enabled`, `locked`, `backStyle`, `wordWrap`, `autoSize`, `imeMode`, `picturePosition`, `mousePointer`, `accelerator`, `takeFocusOnClick`, `borderStyle`, `specialEffect`, `textAlign`, `paragraphAlign`, `maxLength`, `passwordChar`, `scrollBars`, `dragBehavior`, `enterFieldBehavior`, `enterKeyBehavior`, `tabKeyBehavior`, `selectionMargin`, `autoWordSelect`, `hideSelection`, `autoTab`, `multiLine`, `integralHeight` |
-| `properties` site payload in `full-patch` | `tabIndex`, `controlTipText` |
+| `properties` object payload | `caption`, `value`, `groupName`, `fontName`, `fontSize`, `backColor`, `foreColor`, `borderColor`, `enabled`, `locked`, `backStyle`, `alignment`, `wordWrap`, `autoSize`, `imeMode`, `picturePosition`, `mousePointer`, `accelerator`, `takeFocusOnClick`, `borderStyle`, `specialEffect`, `textAlign`, `paragraphAlign`, `maxLength`, `passwordChar`, `scrollBars`, `dragBehavior`, `enterFieldBehavior`, `enterKeyBehavior`, `tabKeyBehavior`, `selectionMargin`, `autoWordSelect`, `hideSelection`, `autoTab`, `multiLine`, `integralHeight` |
+| `properties` site payload in `full-patch` | `tabIndex`, `controlTipText`, `controlSource` when the site already exposes it or create/add emits it |
 | `layout` | `leftPt`, `topPt`, `widthPt`, `heightPt`, plus raw diagnostic aliases |
 | structure | `renames`, `move`, `remove`, `add` |
 | generated VBA | `code.tabStripPanels` |
@@ -47,6 +47,10 @@ The current public writer accepts a deliberately small set of property names:
 parsed payload. If the property is currently default/absent, the writer does not yet promote the prop-mask
 and allocate the new field. That promotion layer is the main gap between "safe editor" and native designer
 parity.
+
+`TripleState` does not have a separate MS-OFORMS field in the MorphData contract. For CheckBox and
+OptionButton the persisted ternary state is the `value` string: `"0"` cleared, `"1"` selected, and any
+other value is the indeterminate state described by the spec.
 
 ## Create/Add JSON Bases
 

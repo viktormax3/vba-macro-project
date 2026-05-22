@@ -1618,6 +1618,7 @@ internal static class ObjectStreamRoundTripRewriter
 
         Add("name");
         Add("controlTipText");
+        Add("controlSource");
         Add("tag");
         return result;
     }

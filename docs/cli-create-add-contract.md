@@ -53,11 +53,11 @@ but normal patches should use point units.
 | `CommandButton` | `caption`, `properties.foreColor`, `properties.backColor`, `properties.enabled`, `properties.locked`, `properties.backStyle`, `properties.wordWrap`, `properties.autoSize`, `properties.imeMode`, `properties.picturePosition`, `properties.mousePointer`, `properties.accelerator`, `properties.takeFocusOnClick`, `properties.tabStop`, `properties.visible`, `properties.default`, `properties.cancel`, `properties.fontName`, `properties.fontSize`, `properties.paragraphAlign` at creation time |
 | `Label` | `caption`, `properties.foreColor`, `properties.backColor`, `properties.borderColor`, `properties.enabled`, `properties.backStyle`, `properties.wordWrap`, `properties.autoSize`, `properties.imeMode`, `properties.picturePosition`, `properties.mousePointer`, `properties.borderStyle`, `properties.specialEffect`, `properties.textAlign` (`left`, `center`, `right`), `properties.accelerator`, `properties.fontName`, `properties.fontSize` |
 | `TextBox` | `value`, `properties.value`, `properties.fontName`, `properties.fontSize`, `properties.backColor`, `properties.foreColor`, `properties.borderColor`, `properties.enabled`, `properties.locked`, `properties.backStyle`, `properties.autoSize`, `properties.autoTab`, `properties.autoWordSelect`, `properties.dragBehavior`, `properties.enterFieldBehavior`, `properties.enterKeyBehavior`, `properties.hideSelection`, `properties.integralHeight`, `properties.multiLine`, `properties.selectionMargin`, `properties.tabKeyBehavior`, `properties.wordWrap`, `properties.imeMode`, `properties.maxLength`, `properties.passwordChar`, `properties.scrollBars`, `properties.borderStyle`, `properties.specialEffect`, `properties.mousePointer`, `properties.textAlign` (`left`, `center`, `right`) |
-| `CheckBox` | `caption`, `value`, `properties.caption`, `properties.value`, `properties.backColor`, `properties.foreColor`, `properties.fontName`, `properties.fontSize` |
+| `CheckBox` | `caption`, `value`, `properties.caption`, `properties.value`, `properties.groupName`, `properties.controlSource`, `properties.fontName`, `properties.fontSize`, `properties.backColor`, `properties.foreColor`, `properties.enabled`, `properties.locked`, `properties.backStyle`, `properties.alignment` (`0` left, `1` right), `properties.wordWrap`, `properties.autoSize`, `properties.imeMode`, `properties.mousePointer`, `properties.specialEffect`, `properties.accelerator`, `properties.textAlign` (`left`, `center`, `right`) |
 | `OptionButton` | same as `CheckBox` |
 | `ToggleButton` | same as `CheckBox`, with command-button TextProps mask |
-| `ComboBox` | `properties.fontName`, `properties.fontSize`; list rows/columns are not generated yet |
-| `ListBox` | `properties.fontName`, `properties.fontSize`; list rows/columns are not generated yet |
+| `ComboBox` | `value`, `properties.fontName`, `properties.fontSize`, colors/border/special-effect fields, `maxLength`, `displayStyle`, `listWidth`, `boundColumn`, `textColumn`, `columnCount`, `listRows`, `matchEntry`, `listStyle`, `showDropButtonWhen`, `dropButtonStyle`, `textAlign`, mouse pointer, and high-level MorphData behavior bits; list row data and non-default `ColumnInfo` arrays are not generated yet |
+| `ListBox` | `properties.fontName`, `properties.fontSize`, colors/border/special-effect fields, `displayStyle`, `listWidth`, `boundColumn`, `textColumn`, `columnCount`, `matchEntry`, `listStyle`, `multiSelect`, `textAlign`, mouse pointer, and high-level MorphData behavior bits; list row data and non-default `ColumnInfo` arrays are not generated yet |
 | `ScrollBar` | `properties.orientation` |
 | `SpinButton` | `properties.orientation` |
 | `Image` | geometry only; picture payload is intentionally pending |
@@ -71,9 +71,12 @@ but normal patches should use point units.
 `properties` patch supports these public property names:
 
 - Object payload: `caption`, `value`, `groupName`, `fontName`, `fontSize`, `backColor`, `foreColor`, `borderColor`.
-- Site payload in `full-patch` mode: `tabIndex`, `controlTipText`.
+- Site payload in `full-patch` mode: `tabIndex`, `controlTipText`, `controlSource` when it already has a site span or is emitted during create/add.
 - Layout/site: `layout[name].leftPt`, `topPt`, `widthPt`, `heightPt`; `renames`; `move`; `remove`.
 - Code generation: `code.tabStripPanels`.
+
+CheckBox/OptionButton ternary state is persisted through `value`, not a separate `TripleState` byte:
+`"0"` means cleared, `"1"` means selected, and any other string is the indeterminate state described by `[MS-OFORMS]`.
 
 Important limitation: colors and other optional fields are only rewritten when the parsed payload already
 contains that documented field/offset. The next property-schema pass must add default-to-explicit promotion

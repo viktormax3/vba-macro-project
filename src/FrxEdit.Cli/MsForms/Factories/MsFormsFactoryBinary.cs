@@ -71,6 +71,13 @@ internal static class MsFormsFactoryBinary
         stream.Write(buffer);
     }
 
+    public static void WriteInt16(Stream stream, int value)
+    {
+        Span<byte> buffer = stackalloc byte[2];
+        BinaryPrimitives.WriteInt16LittleEndian(buffer, checked((short)value));
+        stream.Write(buffer);
+    }
+
     public static void WritePadding(Stream stream, int alignment)
     {
         while (stream.Length % alignment != 0)

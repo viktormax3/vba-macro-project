@@ -290,7 +290,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
     private const uint DefaultVariousPropertyBits = 0x2C80_481B;
     private const int DefaultBorderStyle = 1;
     private const int DefaultSpecialEffect = 2;
-    private const int DefaultTextAlign = 1;
 
     public string Type => "TextBox";
     public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
@@ -309,9 +308,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
         var passwordChar = MsFormsFactoryBinary.GetString(request.Properties, "passwordChar");
         var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
-        var textAlign = MsFormsFactoryBinary.GetInt32(request.Properties, "textAlignRaw") ??
-            ParseTextAlign(request.Properties) ??
-            DefaultTextAlign;
 
         ulong propMask = 0x0000_0000_8000_0101ul; // VariousPropertyBits + Size + reserved bit.
         if (backColor != DefaultBackColor) propMask |= 1ul << 1;
@@ -324,7 +320,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         if (valueBytes.Length > 0) propMask |= 1ul << 22;
         if (borderColor != DefaultBorderColor) propMask |= 1ul << 25;
         if (specialEffect != DefaultSpecialEffect) propMask |= 1ul << 26;
-        if (textAlign != DefaultTextAlign) propMask |= 1ul << 33;
 
         using var dataBlock = new MemoryStream();
         MsFormsFactoryBinary.WriteUInt32(dataBlock, variousBits);
@@ -346,7 +341,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         }
         if ((propMask & (1ul << 25)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, borderColor);
         if ((propMask & (1ul << 26)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)specialEffect));
-        if ((propMask & (1ul << 33)) != 0) dataBlock.WriteByte(checked((byte)textAlign));
         MsFormsFactoryBinary.WritePadding(dataBlock, 4);
 
         using var extra = new MemoryStream();
@@ -358,7 +352,8 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         }
 
         var control = MsFormsFactoryBinary.BuildVersionedMorphControl(propMask, dataBlock.ToArray(), extra.ToArray());
-        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, request.Properties);
+        var textProps = TextPropsFactory.Build(request.Properties, textPropsMask);
         return [.. control, .. textProps];
     }
 
@@ -376,9 +371,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
         var passwordChar = MsFormsFactoryBinary.GetString(request.Properties, "passwordChar");
         var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
-        var textAlign = MsFormsFactoryBinary.GetInt32(request.Properties, "textAlignRaw") ??
-            ParseTextAlign(request.Properties) ??
-            DefaultTextAlign;
         ulong propMask = 0x0000_0000_8000_0101ul;
         if (backColor != DefaultBackColor) propMask |= 1ul << 1;
         if (foreColor != DefaultForeColor) propMask |= 1ul << 2;
@@ -390,9 +382,9 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         if (valueBytes.Length > 0) propMask |= 1ul << 22;
         if (borderColor != DefaultBorderColor) propMask |= 1ul << 25;
         if (specialEffect != DefaultSpecialEffect) propMask |= 1ul << 26;
-        if (textAlign != DefaultTextAlign) propMask |= 1ul << 33;
 
-        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, request.Properties);
+        var metadata = TextPropsFactory.BuildMetadata(textPropsMask, request.Properties);
         metadata["parser"] = "msOFormsMorphData";
         metadata["controlType"] = "TextBox";
         metadata["sizeSource"] = "morphDataExtraDataBlock";
@@ -420,7 +412,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         metadata["scrollBars"] = scrollBars;
         metadata["maxLength"] = maxLength;
         metadata["specialEffect"] = specialEffect;
-        metadata["textAlign"] = TextPropsFactory.TextAlignName(textAlign);
         if (mousePointer != 0) metadata["mousePointer"] = mousePointer;
         if (!string.IsNullOrEmpty(passwordChar)) metadata["passwordChar"] = passwordChar[0].ToString();
         metadata["objectStreamSize"] = objectPayloadSize;
@@ -463,12 +454,6 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         return bits;
     }
 
-    private static int? ParseTextAlign(Dictionary<string, object?> properties) =>
-        MsFormsFactoryBinary.GetString(properties, "textAlign") is { } textAlign &&
-        TextPropsFactory.TryParseTextAlign(textAlign, out var parsed)
-            ? parsed
-            : null;
-
     private static void SetBit(ref uint bits, int bit, bool? value)
     {
         if (value is null) return;
@@ -479,13 +464,16 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
 
 internal abstract class MorphButtonControlSchema : IGeneratedControlSchema
 {
-    private const ulong MorphButtonPropMask = 0x0000_0000_80C0_0146ul;
     private const uint DefaultBackColor = 0x8000_000F;
-    private const uint DefaultForeColor = 0x8000_0012;
+    private const uint PersistedForeColor = 0x8000_0012;
+    private const uint FileDefaultForeColor = 0x8000_0008;
+    private const uint DefaultPicturePosition = 0x0007_0001;
+    private const int DefaultSpecialEffect = 0;
 
     public abstract string Type { get; }
     public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
     protected abstract byte DisplayStyle { get; }
+    protected abstract uint DefaultVariousPropertyBits { get; }
     protected virtual uint TextPropsMask => TextPropsFactory.StandardMask;
 
     public byte[] BuildObjectPayload(GeneratedControlRequest request)
@@ -495,46 +483,159 @@ internal abstract class MorphButtonControlSchema : IGeneratedControlSchema
         var valueBytes = Encoding.Latin1.GetBytes(value);
         var captionBytes = Encoding.Latin1.GetBytes(caption);
         var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
-        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), PersistedForeColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
+        var multiSelect = MsFormsFactoryBinary.GetInt32(request.Properties, "multiSelect") ?? 0;
+        var picturePosition = MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition") ?? unchecked((int)DefaultPicturePosition);
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
+        var accelerator = MsFormsFactoryBinary.GetString(request.Properties, "accelerator");
+        var groupName = MsFormsFactoryBinary.GetString(request.Properties, "groupName") ?? string.Empty;
+        var groupNameBytes = Encoding.Latin1.GetBytes(groupName);
+        var propMask = BuildPropMask(valueBytes.Length, captionBytes.Length, groupNameBytes.Length, backColor, foreColor, variousBits,
+            mousePointer, multiSelect, picturePosition, specialEffect, accelerator);
 
         using var dataBlock = new MemoryStream();
-        MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
-        MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
-        dataBlock.WriteByte(DisplayStyle);
-        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
-        MsFormsFactoryBinary.WriteCount(dataBlock, valueBytes.Length);
-        MsFormsFactoryBinary.WriteCount(dataBlock, captionBytes.Length);
+        WriteDataBlock(dataBlock, propMask, valueBytes, captionBytes, groupNameBytes, backColor, foreColor, variousBits,
+            mousePointer, multiSelect, picturePosition, specialEffect, accelerator);
 
         using var extra = new MemoryStream();
         MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
-        extra.Write(valueBytes);
-        MsFormsFactoryBinary.WritePadding(extra, 4);
-        extra.Write(captionBytes);
-        MsFormsFactoryBinary.WritePadding(extra, 4);
+        WriteFmString(extra, propMask, 22, valueBytes);
+        WriteFmString(extra, propMask, 23, captionBytes);
+        WriteFmString(extra, propMask, 32, groupNameBytes);
 
-        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(MorphButtonPropMask, dataBlock.ToArray(), extra.ToArray());
-        var textProps = TextPropsFactory.Build(request.Properties, TextPropsMask);
+        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(propMask, dataBlock.ToArray(), extra.ToArray());
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsMask, request.Properties);
+        var textProps = TextPropsFactory.Build(request.Properties, textPropsMask);
         return [.. control, .. textProps];
     }
 
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
-        var metadata = TextPropsFactory.BuildMetadata(TextPropsMask, request.Properties);
+        var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? "0";
+        var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        var groupName = MsFormsFactoryBinary.GetString(request.Properties, "groupName") ?? string.Empty;
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), PersistedForeColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
+        var multiSelect = MsFormsFactoryBinary.GetInt32(request.Properties, "multiSelect") ?? 0;
+        var picturePosition = MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition") ?? unchecked((int)DefaultPicturePosition);
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
+        var accelerator = MsFormsFactoryBinary.GetString(request.Properties, "accelerator");
+        var propMask = BuildPropMask(Encoding.Latin1.GetByteCount(value), Encoding.Latin1.GetByteCount(caption),
+            Encoding.Latin1.GetByteCount(groupName), backColor, foreColor, variousBits, mousePointer, multiSelect,
+            picturePosition, specialEffect, accelerator);
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsMask, request.Properties);
+        var metadata = TextPropsFactory.BuildMetadata(textPropsMask, request.Properties);
         metadata["parser"] = "msOFormsMorphData";
         metadata["controlType"] = Type;
         metadata["sizeSource"] = "morphDataExtraDataBlock";
-        metadata["propMask"] = "0x0000000080C00146";
-        metadata["backColor"] = MsFormsFactoryBinary.GetString(request.Properties, "backColor") ?? "&H8000000F&";
-        metadata["foreColor"] = MsFormsFactoryBinary.GetString(request.Properties, "foreColor") ?? "&H80000012&";
+        metadata["propMask"] = $"0x{propMask:X16}";
+        metadata["backColor"] = $"&H{backColor:X8}&";
+        metadata["foreColor"] = $"&H{foreColor:X8}&";
         metadata["displayStyle"] = DisplayStyle;
-        metadata["value"] = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? "0";
-        metadata["caption"] = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        metadata["value"] = value;
+        metadata["caption"] = caption;
+        if (variousBits != DefaultVariousPropertyBits)
+        {
+            metadata["variousPropertyBitsRaw"] = unchecked((int)variousBits);
+            AddVariousMetadata(metadata, variousBits);
+        }
+        if (mousePointer != 0) metadata["mousePointer"] = mousePointer;
+        if (multiSelect != 0) metadata["multiSelect"] = multiSelect;
+        if (unchecked((uint)picturePosition) != DefaultPicturePosition) metadata["picturePosition"] = picturePosition;
+        if (specialEffect != DefaultSpecialEffect) metadata["specialEffect"] = specialEffect;
+        if (!string.IsNullOrEmpty(accelerator)) metadata["accelerator"] = accelerator[0].ToString();
+        if (!string.IsNullOrEmpty(groupName)) metadata["groupName"] = groupName;
         metadata["objectStreamSize"] = objectPayloadSize;
         metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
         metadata["tabStop"] = true;
         metadata["visible"] = true;
         metadata["streamed"] = true;
         return metadata;
+    }
+
+    private ulong BuildPropMask(int valueLength, int captionLength, int groupNameLength, uint backColor, uint foreColor,
+        uint variousBits, int mousePointer, int multiSelect, int picturePosition, int specialEffect, string? accelerator)
+    {
+        ulong mask = 1ul << 6 | 1ul << 8 | 1ul << 31; // DisplayStyle, Size, Reserved.
+        if (variousBits != DefaultVariousPropertyBits) mask |= 1ul << 0;
+        if (backColor != DefaultBackColor || Type is "CheckBox" or "OptionButton") mask |= 1ul << 1;
+        if (foreColor != FileDefaultForeColor || Type is "CheckBox" or "OptionButton") mask |= 1ul << 2;
+        if (mousePointer != 0) mask |= 1ul << 7;
+        if (multiSelect != 0) mask |= 1ul << 21;
+        if (valueLength > 0) mask |= 1ul << 22;
+        if (captionLength > 0) mask |= 1ul << 23;
+        if (unchecked((uint)picturePosition) != DefaultPicturePosition) mask |= 1ul << 24;
+        if (specialEffect != DefaultSpecialEffect) mask |= 1ul << 26;
+        if (!string.IsNullOrEmpty(accelerator)) mask |= 1ul << 29;
+        if (groupNameLength > 0) mask |= 1ul << 32;
+        return mask;
+    }
+
+    private void WriteDataBlock(Stream dataBlock, ulong mask, byte[] valueBytes, byte[] captionBytes, byte[] groupNameBytes,
+        uint backColor, uint foreColor, uint variousBits, int mousePointer, int multiSelect, int picturePosition,
+        int specialEffect, string? accelerator)
+    {
+        if (Has(mask, 0)) MsFormsFactoryBinary.WriteUInt32(dataBlock, variousBits);
+        if (Has(mask, 1)) MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
+        if (Has(mask, 2)) MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
+        dataBlock.WriteByte(DisplayStyle);
+        if (Has(mask, 7)) dataBlock.WriteByte(checked((byte)mousePointer));
+        if (Has(mask, 21)) dataBlock.WriteByte(checked((byte)multiSelect));
+        if (Has(mask, 22)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteCount(dataBlock, valueBytes.Length); }
+        if (Has(mask, 23)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteCount(dataBlock, captionBytes.Length); }
+        if (Has(mask, 24)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)picturePosition)); }
+        if (Has(mask, 26)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)specialEffect)); }
+        if (Has(mask, 29)) { MsFormsFactoryBinary.WritePadding(dataBlock, 2); MsFormsFactoryBinary.WriteUInt16(dataBlock, accelerator![0]); }
+        if (Has(mask, 32)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteCount(dataBlock, groupNameBytes.Length); }
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+    }
+
+    private static void WriteFmString(Stream extra, ulong mask, int bit, byte[] bytes)
+    {
+        if (!Has(mask, bit)) return;
+        extra.Write(bytes);
+        MsFormsFactoryBinary.WritePadding(extra, 4);
+    }
+
+    private uint BuildVariousPropertyBits(Dictionary<string, object?> properties)
+    {
+        var bits = DefaultVariousPropertyBits;
+        SetBit(ref bits, 1, MsFormsFactoryBinary.GetBool(properties, "enabled"));
+        SetBit(ref bits, 2, MsFormsFactoryBinary.GetBool(properties, "locked"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "backStyle") is int backStyle) SetBit(ref bits, 3, backStyle != 0);
+        if (MsFormsFactoryBinary.GetInt32(properties, "alignment") is int alignment) SetBit(ref bits, 13, alignment == 0);
+        SetBit(ref bits, 23, MsFormsFactoryBinary.GetBool(properties, "wordWrap"));
+        SetBit(ref bits, 28, MsFormsFactoryBinary.GetBool(properties, "autoSize"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "imeMode") is int imeMode)
+        {
+            bits &= ~(0xFu << 15);
+            bits |= ((uint)imeMode & 0xFu) << 15;
+        }
+        return bits;
+    }
+
+    private static void AddVariousMetadata(Dictionary<string, object?> metadata, uint bits)
+    {
+        metadata["enabled"] = (bits & (1u << 1)) != 0;
+        metadata["locked"] = (bits & (1u << 2)) != 0;
+        metadata["backStyle"] = (bits & (1u << 3)) != 0 ? 1 : 0;
+        metadata["alignment"] = (bits & (1u << 13)) != 0 ? 0 : 1;
+        metadata["imeMode"] = (int)((bits >> 15) & 0x0F);
+        metadata["wordWrap"] = (bits & (1u << 23)) != 0;
+        metadata["autoSize"] = (bits & (1u << 28)) != 0;
+    }
+
+    private static bool Has(ulong value, int bit) => (value & (1ul << bit)) != 0;
+
+    private static void SetBit(ref uint bits, int bit, bool? value)
+    {
+        if (value is null) return;
+        var mask = 1u << bit;
+        bits = value.Value ? bits | mask : bits & ~mask;
     }
 }
 
@@ -542,106 +643,306 @@ internal sealed class CheckBoxControlSchema : MorphButtonControlSchema
 {
     public override string Type => "CheckBox";
     protected override byte DisplayStyle => 4;
+    protected override uint DefaultVariousPropertyBits => 0x2C80_081B;
 }
 
 internal sealed class OptionButtonControlSchema : MorphButtonControlSchema
 {
     public override string Type => "OptionButton";
     protected override byte DisplayStyle => 5;
+    protected override uint DefaultVariousPropertyBits => 0x0080_001B;
 }
 
 internal sealed class ToggleButtonControlSchema : MorphButtonControlSchema
 {
     public override string Type => "ToggleButton";
     protected override byte DisplayStyle => 6;
+    protected override uint DefaultVariousPropertyBits => 0x2C80_081B;
     protected override uint TextPropsMask => TextPropsFactory.CommandButtonMask;
 }
 
-internal sealed class ComboBoxControlSchema : IGeneratedControlSchema
+internal abstract class MorphListControlSchema : IGeneratedControlSchema
 {
-    private const ulong PropMask = 0x0000_0000_8005_0141ul;
-    private const uint VariousPropertyBits = 0x2C80_481B;
+    private const uint DefaultBackColor = 0x8000_0005;
+    private const uint DefaultForeColor = 0x8000_0008;
+    private const uint DefaultBorderColor = 0x8000_0006;
+    private const int DefaultBorderStyle = 1;
+    private const int DefaultSpecialEffect = 2;
 
-    public string Type => "ComboBox";
+    public abstract string Type { get; }
     public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
+    protected abstract uint DefaultVariousPropertyBits { get; }
+    protected abstract int DefaultDisplayStyle { get; }
+    protected abstract int PersistedDisplayStyle { get; }
+    protected abstract int PersistedMatchEntry { get; }
+    protected virtual int DefaultScrollBars => 0;
+    protected virtual int PersistedScrollBars => DefaultScrollBars;
+    protected virtual int? PersistedShowDropButtonWhen => null;
+    protected virtual bool SupportsMaxLength => false;
+    protected virtual bool SupportsListRows => false;
+    protected virtual bool SupportsShowDropButtonWhen => false;
+    protected virtual bool SupportsDropButtonStyle => false;
+    protected virtual bool SupportsMultiSelect => false;
 
     public byte[] BuildObjectPayload(GeneratedControlRequest request)
     {
-        using var dataBlock = new MemoryStream();
-        MsFormsFactoryBinary.WriteUInt32(dataBlock, VariousPropertyBits);
-        dataBlock.WriteByte(3); // fmDisplayStyleDropDownCombo.
-        dataBlock.WriteByte(1); // fmMatchEntryComplete.
-        dataBlock.WriteByte(2); // fmShowDropButtonWhenFocus.
-        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+        var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? string.Empty;
+        var valueBytes = Encoding.Latin1.GetBytes(value);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var borderColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "borderColor"), DefaultBorderColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var maxLength = SupportsMaxLength ? MsFormsFactoryBinary.GetInt32(request.Properties, "maxLength") ?? 0 : 0;
+        var borderStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle") ?? DefaultBorderStyle;
+        var scrollBars = MsFormsFactoryBinary.GetInt32(request.Properties, "scrollBars") ?? PersistedScrollBars;
+        var displayStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "displayStyle") ?? PersistedDisplayStyle;
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
+        var listWidth = MsFormsFactoryBinary.GetInt32(request.Properties, "listWidth") ?? 0;
+        var boundColumn = MsFormsFactoryBinary.GetInt32(request.Properties, "boundColumn") ?? 1;
+        var textColumn = MsFormsFactoryBinary.GetInt32(request.Properties, "textColumn") ?? -1;
+        var columnCount = MsFormsFactoryBinary.GetInt32(request.Properties, "columnCount") ?? 1;
+        var listRows = SupportsListRows ? MsFormsFactoryBinary.GetInt32(request.Properties, "listRows") ?? 8 : 8;
+        var matchEntry = MsFormsFactoryBinary.GetInt32(request.Properties, "matchEntry") ?? PersistedMatchEntry;
+        var listStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "listStyle") ?? 0;
+        var showDropButtonWhen = SupportsShowDropButtonWhen
+            ? MsFormsFactoryBinary.GetInt32(request.Properties, "showDropButtonWhen") ?? PersistedShowDropButtonWhen ?? 0
+            : 0;
+        var dropButtonStyle = SupportsDropButtonStyle ? MsFormsFactoryBinary.GetInt32(request.Properties, "dropButtonStyle") ?? 1 : 1;
+        var multiSelect = SupportsMultiSelect ? MsFormsFactoryBinary.GetInt32(request.Properties, "multiSelect") ?? 0 : 0;
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
 
+        var propMask = BuildPropMask(valueBytes.Length, backColor, foreColor, borderColor, variousBits, maxLength, borderStyle, scrollBars,
+            displayStyle, mousePointer, listWidth, boundColumn, textColumn, columnCount, listRows, matchEntry, listStyle,
+            showDropButtonWhen, dropButtonStyle, multiSelect, specialEffect);
+
+        using var dataBlock = new MemoryStream();
+        WriteDataBlock(dataBlock, propMask, valueBytes, backColor, foreColor, borderColor, variousBits, maxLength, borderStyle, scrollBars,
+            displayStyle, mousePointer, listWidth, boundColumn, textColumn, columnCount, listRows, matchEntry, listStyle,
+            showDropButtonWhen, dropButtonStyle, multiSelect, specialEffect);
         using var extra = new MemoryStream();
         MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
+        if (valueBytes.Length > 0)
+        {
+            extra.Write(valueBytes);
+            MsFormsFactoryBinary.WritePadding(extra, 4);
+        }
 
-        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(PropMask, dataBlock.ToArray(), extra.ToArray());
-        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
+        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(propMask, dataBlock.ToArray(), extra.ToArray());
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, request.Properties);
+        var textProps = TextPropsFactory.Build(request.Properties, textPropsMask);
         return [.. control, .. textProps];
     }
 
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
-        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
+        var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? string.Empty;
+        var valueBytes = Encoding.Latin1.GetBytes(value);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var borderColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "borderColor"), DefaultBorderColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var maxLength = SupportsMaxLength ? MsFormsFactoryBinary.GetInt32(request.Properties, "maxLength") ?? 0 : 0;
+        var borderStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle") ?? DefaultBorderStyle;
+        var scrollBars = MsFormsFactoryBinary.GetInt32(request.Properties, "scrollBars") ?? PersistedScrollBars;
+        var displayStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "displayStyle") ?? PersistedDisplayStyle;
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
+        var listWidth = MsFormsFactoryBinary.GetInt32(request.Properties, "listWidth") ?? 0;
+        var boundColumn = MsFormsFactoryBinary.GetInt32(request.Properties, "boundColumn") ?? 1;
+        var textColumn = MsFormsFactoryBinary.GetInt32(request.Properties, "textColumn") ?? -1;
+        var columnCount = MsFormsFactoryBinary.GetInt32(request.Properties, "columnCount") ?? 1;
+        var listRows = SupportsListRows ? MsFormsFactoryBinary.GetInt32(request.Properties, "listRows") ?? 8 : 8;
+        var matchEntry = MsFormsFactoryBinary.GetInt32(request.Properties, "matchEntry") ?? PersistedMatchEntry;
+        var listStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "listStyle") ?? 0;
+        var showDropButtonWhen = SupportsShowDropButtonWhen
+            ? MsFormsFactoryBinary.GetInt32(request.Properties, "showDropButtonWhen") ?? PersistedShowDropButtonWhen ?? 0
+            : 0;
+        var dropButtonStyle = SupportsDropButtonStyle ? MsFormsFactoryBinary.GetInt32(request.Properties, "dropButtonStyle") ?? 1 : 1;
+        var multiSelect = SupportsMultiSelect ? MsFormsFactoryBinary.GetInt32(request.Properties, "multiSelect") ?? 0 : 0;
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
+        var propMask = BuildPropMask(valueBytes.Length, backColor, foreColor, borderColor, variousBits, maxLength, borderStyle, scrollBars,
+            displayStyle, mousePointer, listWidth, boundColumn, textColumn, columnCount, listRows, matchEntry, listStyle,
+            showDropButtonWhen, dropButtonStyle, multiSelect, specialEffect);
+
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, request.Properties);
+        var metadata = TextPropsFactory.BuildMetadata(textPropsMask, request.Properties);
         metadata["parser"] = "msOFormsMorphData";
         metadata["controlType"] = Type;
         metadata["sizeSource"] = "morphDataExtraDataBlock";
-        metadata["propMask"] = "0x0000000080050141";
-        metadata["variousPropertyBitsRaw"] = VariousPropertyBits;
-        metadata["displayStyle"] = 3;
-        metadata["matchEntry"] = 1;
-        metadata["showDropButtonWhen"] = 2;
+        metadata["propMask"] = $"0x{propMask:X16}";
+        metadata["variousPropertyBitsRaw"] = unchecked((int)variousBits);
+        AddVariousMetadata(metadata, variousBits);
+        metadata["backColor"] = $"&H{backColor:X8}&";
+        metadata["foreColor"] = $"&H{foreColor:X8}&";
+        metadata["borderColor"] = $"&H{borderColor:X8}&";
+        metadata["borderStyle"] = borderStyle;
+        metadata["displayStyle"] = displayStyle;
+        metadata["matchEntry"] = matchEntry;
+        metadata["specialEffect"] = specialEffect;
+        if (scrollBars != DefaultScrollBars || Type.Equals("ListBox", StringComparison.OrdinalIgnoreCase)) metadata["scrollBars"] = scrollBars;
+        if (listWidth != 0) metadata["listWidth"] = listWidth;
+        if (boundColumn != 1) metadata["boundColumn"] = boundColumn;
+        if (textColumn != -1) metadata["textColumn"] = textColumn;
+        if (columnCount != 1) metadata["columnCount"] = columnCount;
+        if (SupportsMaxLength && maxLength != 0) metadata["maxLength"] = maxLength;
+        if (SupportsListRows) metadata["listRows"] = listRows;
+        if (SupportsShowDropButtonWhen) metadata["showDropButtonWhen"] = showDropButtonWhen;
+        if (SupportsDropButtonStyle) metadata["dropButtonStyle"] = dropButtonStyle;
+        if (SupportsMultiSelect) metadata["multiSelect"] = multiSelect;
+        if (listStyle != 0) metadata["listStyle"] = listStyle;
+        if (mousePointer != 0) metadata["mousePointer"] = mousePointer;
+        if (value.Length > 0) metadata["value"] = value;
         metadata["objectStreamSize"] = objectPayloadSize;
         metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
         metadata["tabStop"] = true;
         metadata["visible"] = true;
         metadata["streamed"] = true;
         return metadata;
+    }
+
+    protected virtual uint BuildVariousPropertyBits(Dictionary<string, object?> properties)
+    {
+        var bits = DefaultVariousPropertyBits;
+        SetBit(ref bits, 1, MsFormsFactoryBinary.GetBool(properties, "enabled"));
+        SetBit(ref bits, 2, MsFormsFactoryBinary.GetBool(properties, "locked"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "backStyle") is int backStyle) SetBit(ref bits, 3, backStyle != 0);
+        SetBit(ref bits, 10, MsFormsFactoryBinary.GetBool(properties, "columnHeads"));
+        SetBit(ref bits, 11, MsFormsFactoryBinary.GetBool(properties, "integralHeight"));
+        SetBit(ref bits, 12, MsFormsFactoryBinary.GetBool(properties, "matchRequired"));
+        SetBit(ref bits, 14, MsFormsFactoryBinary.GetBool(properties, "editable"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "dragBehavior") is int dragBehavior) SetBit(ref bits, 19, dragBehavior != 0);
+        if (MsFormsFactoryBinary.GetInt32(properties, "enterFieldBehavior") is int enterFieldBehavior) SetBit(ref bits, 21, enterFieldBehavior != 0);
+        SetBit(ref bits, 23, MsFormsFactoryBinary.GetBool(properties, "wordWrap"));
+        SetBit(ref bits, 26, MsFormsFactoryBinary.GetBool(properties, "selectionMargin"));
+        SetBit(ref bits, 27, MsFormsFactoryBinary.GetBool(properties, "autoWordSelect"));
+        SetBit(ref bits, 28, MsFormsFactoryBinary.GetBool(properties, "autoSize"));
+        SetBit(ref bits, 29, MsFormsFactoryBinary.GetBool(properties, "hideSelection"));
+        SetBit(ref bits, 30, MsFormsFactoryBinary.GetBool(properties, "autoTab"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "imeMode") is int imeMode)
+        {
+            bits &= ~(0xFu << 15);
+            bits |= ((uint)imeMode & 0xFu) << 15;
+        }
+
+        return bits;
+    }
+
+    private ulong BuildPropMask(int valueLength, uint backColor, uint foreColor, uint borderColor, uint variousBits, int maxLength,
+        int borderStyle, int scrollBars, int displayStyle, int mousePointer, int listWidth, int boundColumn, int textColumn,
+        int columnCount, int listRows, int matchEntry, int listStyle, int showDropButtonWhen, int dropButtonStyle,
+        int multiSelect, int specialEffect)
+    {
+        ulong mask = 1ul << 8 | 1ul << 31;
+        if (variousBits != DefaultVariousPropertyBits || Type.Equals("ComboBox", StringComparison.OrdinalIgnoreCase)) mask |= 1ul << 0;
+        if (backColor != DefaultBackColor) mask |= 1ul << 1;
+        if (foreColor != DefaultForeColor) mask |= 1ul << 2;
+        if (SupportsMaxLength && maxLength != 0) mask |= 1ul << 3;
+        if (borderStyle != DefaultBorderStyle) mask |= 1ul << 4;
+        if (scrollBars != DefaultScrollBars || Type.Equals("ListBox", StringComparison.OrdinalIgnoreCase)) mask |= 1ul << 5;
+        if (displayStyle != DefaultDisplayStyle || Type.Equals("ListBox", StringComparison.OrdinalIgnoreCase) || Type.Equals("ComboBox", StringComparison.OrdinalIgnoreCase)) mask |= 1ul << 6;
+        if (mousePointer != 0) mask |= 1ul << 7;
+        if (listWidth != 0) mask |= 1ul << 10;
+        if (boundColumn != 1) mask |= 1ul << 11;
+        if (textColumn != -1) mask |= 1ul << 12;
+        if (columnCount != 1) mask |= 1ul << 13;
+        if (SupportsListRows && listRows != 8) mask |= 1ul << 14;
+        if (matchEntry != 2 || Type.Equals("ListBox", StringComparison.OrdinalIgnoreCase) || Type.Equals("ComboBox", StringComparison.OrdinalIgnoreCase)) mask |= 1ul << 16;
+        if (listStyle != 0) mask |= 1ul << 17;
+        if (SupportsShowDropButtonWhen && showDropButtonWhen != 0) mask |= 1ul << 18;
+        if (SupportsDropButtonStyle && dropButtonStyle != 1) mask |= 1ul << 20;
+        if (SupportsMultiSelect && multiSelect != 0) mask |= 1ul << 21;
+        if (valueLength > 0) mask |= 1ul << 22;
+        if (borderColor != DefaultBorderColor) mask |= 1ul << 25;
+        if (specialEffect != DefaultSpecialEffect) mask |= 1ul << 26;
+        return mask;
+    }
+
+    private static void WriteDataBlock(Stream dataBlock, ulong mask, byte[] valueBytes, uint backColor, uint foreColor, uint borderColor,
+        uint variousBits, int maxLength, int borderStyle, int scrollBars, int displayStyle, int mousePointer, int listWidth,
+        int boundColumn, int textColumn, int columnCount, int listRows, int matchEntry, int listStyle, int showDropButtonWhen,
+        int dropButtonStyle, int multiSelect, int specialEffect)
+    {
+        if (Has(mask, 0)) MsFormsFactoryBinary.WriteUInt32(dataBlock, variousBits);
+        if (Has(mask, 1)) MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
+        if (Has(mask, 2)) MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
+        if (Has(mask, 3)) MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)maxLength));
+        if (Has(mask, 4)) dataBlock.WriteByte(checked((byte)borderStyle));
+        if (Has(mask, 5)) dataBlock.WriteByte(checked((byte)scrollBars));
+        if (Has(mask, 6)) dataBlock.WriteByte(checked((byte)displayStyle));
+        if (Has(mask, 7)) dataBlock.WriteByte(checked((byte)mousePointer));
+        if (Has(mask, 10)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)listWidth)); }
+        if (Has(mask, 11)) { MsFormsFactoryBinary.WritePadding(dataBlock, 2); MsFormsFactoryBinary.WriteUInt16(dataBlock, boundColumn); }
+        if (Has(mask, 12)) { MsFormsFactoryBinary.WritePadding(dataBlock, 2); MsFormsFactoryBinary.WriteInt16(dataBlock, textColumn); }
+        if (Has(mask, 13)) { MsFormsFactoryBinary.WritePadding(dataBlock, 2); MsFormsFactoryBinary.WriteInt16(dataBlock, columnCount); }
+        if (Has(mask, 14)) { MsFormsFactoryBinary.WritePadding(dataBlock, 2); MsFormsFactoryBinary.WriteUInt16(dataBlock, listRows); }
+        if (Has(mask, 16)) dataBlock.WriteByte(checked((byte)matchEntry));
+        if (Has(mask, 17)) dataBlock.WriteByte(checked((byte)listStyle));
+        if (Has(mask, 18)) dataBlock.WriteByte(checked((byte)showDropButtonWhen));
+        if (Has(mask, 20)) dataBlock.WriteByte(checked((byte)dropButtonStyle));
+        if (Has(mask, 21)) dataBlock.WriteByte(checked((byte)multiSelect));
+        if (Has(mask, 22)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteCount(dataBlock, valueBytes.Length); }
+        if (Has(mask, 25)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteUInt32(dataBlock, borderColor); }
+        if (Has(mask, 26)) { MsFormsFactoryBinary.WritePadding(dataBlock, 4); MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)specialEffect)); }
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+    }
+
+    private static void AddVariousMetadata(Dictionary<string, object?> metadata, uint bits)
+    {
+        metadata["enabled"] = (bits & (1u << 1)) != 0;
+        metadata["locked"] = (bits & (1u << 2)) != 0;
+        metadata["backStyle"] = (bits & (1u << 3)) != 0 ? 1 : 0;
+        metadata["columnHeads"] = (bits & (1u << 10)) != 0;
+        metadata["integralHeight"] = (bits & (1u << 11)) != 0;
+        metadata["matchRequired"] = (bits & (1u << 12)) != 0;
+        metadata["editable"] = (bits & (1u << 14)) != 0;
+        metadata["dragBehavior"] = (bits & (1u << 19)) != 0 ? 1 : 0;
+        metadata["enterFieldBehavior"] = (bits & (1u << 21)) != 0 ? 1 : 0;
+        metadata["wordWrap"] = (bits & (1u << 23)) != 0;
+        metadata["selectionMargin"] = (bits & (1u << 26)) != 0;
+        metadata["autoWordSelect"] = (bits & (1u << 27)) != 0;
+        metadata["autoSize"] = (bits & (1u << 28)) != 0;
+        metadata["hideSelection"] = (bits & (1u << 29)) != 0;
+        metadata["autoTab"] = (bits & (1u << 30)) != 0;
+    }
+
+    private static int? ParseTextAlign(Dictionary<string, object?> properties) =>
+        MsFormsFactoryBinary.GetString(properties, "textAlign") is { } textAlign &&
+        TextPropsFactory.TryParseTextAlign(textAlign, out var parsed)
+            ? parsed
+            : null;
+
+    private static bool Has(ulong value, int bit) => (value & (1ul << bit)) != 0;
+
+    private static void SetBit(ref uint bits, int bit, bool? value)
+    {
+        if (value is null) return;
+        var mask = 1u << bit;
+        bits = value.Value ? bits | mask : bits & ~mask;
     }
 }
 
-internal sealed class ListBoxControlSchema : IGeneratedControlSchema
+internal sealed class ComboBoxControlSchema : MorphListControlSchema
 {
-    private const ulong PropMask = 0x0000_0000_8001_0160ul;
+    public override string Type => "ComboBox";
+    protected override uint DefaultVariousPropertyBits => 0x2C80_481B;
+    protected override int DefaultDisplayStyle => 1;
+    protected override int PersistedDisplayStyle => 3;
+    protected override int PersistedMatchEntry => 1;
+    protected override int? PersistedShowDropButtonWhen => 2;
+    protected override bool SupportsMaxLength => true;
+    protected override bool SupportsListRows => true;
+    protected override bool SupportsShowDropButtonWhen => true;
+    protected override bool SupportsDropButtonStyle => true;
+}
 
-    public string Type => "ListBox";
-    public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
-
-    public byte[] BuildObjectPayload(GeneratedControlRequest request)
-    {
-        using var dataBlock = new MemoryStream();
-        dataBlock.WriteByte(3); // fmScrollBarsBoth.
-        dataBlock.WriteByte(2); // fmDisplayStyleList.
-        dataBlock.WriteByte(0); // fmMatchEntryFirstLetter.
-        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
-
-        using var extra = new MemoryStream();
-        MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
-
-        var control = MsFormsFactoryBinary.BuildVersionedMorphControl(PropMask, dataBlock.ToArray(), extra.ToArray());
-        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
-        return [.. control, .. textProps];
-    }
-
-    public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
-    {
-        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
-        metadata["parser"] = "msOFormsMorphData";
-        metadata["controlType"] = Type;
-        metadata["sizeSource"] = "morphDataExtraDataBlock";
-        metadata["propMask"] = "0x0000000080010160";
-        metadata["scrollBars"] = 3;
-        metadata["displayStyle"] = 2;
-        metadata["matchEntry"] = 0;
-        metadata["objectStreamSize"] = objectPayloadSize;
-        metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
-        metadata["tabStop"] = true;
-        metadata["visible"] = true;
-        metadata["streamed"] = true;
-        return metadata;
-    }
+internal sealed class ListBoxControlSchema : MorphListControlSchema
+{
+    public override string Type => "ListBox";
+    protected override uint DefaultVariousPropertyBits => 0x0000_001B;
+    protected override int DefaultDisplayStyle => 1;
+    protected override int PersistedDisplayStyle => 2;
+    protected override int PersistedMatchEntry => 0;
+    protected override int PersistedScrollBars => 3;
+    protected override bool SupportsMultiSelect => true;
 }
 
 internal abstract class SpinLikeControlSchema : IGeneratedControlSchema

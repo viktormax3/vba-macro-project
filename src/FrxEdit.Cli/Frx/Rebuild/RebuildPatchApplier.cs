@@ -19,6 +19,7 @@ internal static class RebuildPatchApplier
         "picturePosition",
         "mousePointer",
         "accelerator",
+        "alignment",
         "takeFocusOnClick",
         "borderStyle",
         "specialEffect",
@@ -27,6 +28,17 @@ internal static class RebuildPatchApplier
         "maxLength",
         "passwordChar",
         "scrollBars",
+        "displayStyle",
+        "listWidth",
+        "boundColumn",
+        "textColumn",
+        "columnCount",
+        "listRows",
+        "matchEntry",
+        "listStyle",
+        "showDropButtonWhen",
+        "dropButtonStyle",
+        "multiSelect",
         "dragBehavior",
         "enterFieldBehavior",
         "enterKeyBehavior",
@@ -36,13 +48,17 @@ internal static class RebuildPatchApplier
         "hideSelection",
         "autoTab",
         "multiLine",
-        "integralHeight"
+        "integralHeight",
+        "columnHeads",
+        "matchRequired",
+        "editable"
     };
 
     private static readonly HashSet<string> FormSitePropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "tabIndex",
         "controlTipText",
+        "controlSource",
         "tabStop",
         "visible",
         "default",
@@ -952,6 +968,13 @@ internal static class RebuildPatchApplier
                 }
                 props["controlTipText"] = RequireString(controlName, propertyName, value);
                 break;
+            case "controlsource":
+                if (!props.ContainsKey("controlSourceSpan"))
+                {
+                    throw new CliException($"Cannot patch '{controlName}.controlSource': this control does not expose a documented controlSourceSpan in FormSiteData. Emit it during add/create first.");
+                }
+                props["controlSource"] = RequireString(controlName, propertyName, value);
+                break;
             case "backcolor":
             case "forecolor":
             case "bordercolor":
@@ -974,11 +997,23 @@ internal static class RebuildPatchApplier
             case "autotab":
             case "multiline":
             case "integralheight":
+            case "columnheads":
+            case "matchrequired":
+            case "editable":
                 SetVariousPropertyBit(props, propertyName, RequireBoolean(controlName, propertyName, value));
                 break;
             case "backstyle":
                 SetVariousPropertyBit(props, propertyName, RequireUInt16(controlName, propertyName, value) != 0);
                 props["backStyle"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "alignment":
+                var alignment = RequireUInt16(controlName, propertyName, value);
+                if (alignment is > 1)
+                {
+                    throw new CliException($"Property '{propertyName}' for '{controlName}' must be 0 or 1.");
+                }
+                SetVariousPropertyBit(props, propertyName, alignment == 0);
+                props["alignment"] = alignment;
                 break;
             case "imemode":
                 SetImeMode(props, RequireUInt16(controlName, propertyName, value));
@@ -995,6 +1030,21 @@ internal static class RebuildPatchApplier
             case "scrollbars":
                 props["scrollBars"] = RequireUInt16(controlName, propertyName, value);
                 break;
+            case "displaystyle":
+            case "listwidth":
+            case "boundcolumn":
+            case "listrows":
+            case "matchentry":
+            case "liststyle":
+            case "showdropbuttonwhen":
+            case "dropbuttonstyle":
+            case "multiselect":
+                props[CanonicalPropertyName(propertyName)] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "textcolumn":
+            case "columncount":
+                props[CanonicalPropertyName(propertyName)] = RequireInt16(controlName, propertyName, value);
+                break;
             case "dragbehavior":
             case "enterfieldbehavior":
                 var behaviorValue = RequireUInt16(controlName, propertyName, value);
@@ -1010,14 +1060,7 @@ internal static class RebuildPatchApplier
             case "textalign":
                 var textAlign = RequireTextAlign(controlName, propertyName, value);
                 props["textAlign"] = TextPropsFactory.TextAlignName(textAlign);
-                if (IsTextBox(props))
-                {
-                    props["textAlignRaw"] = textAlign;
-                }
-                else
-                {
-                    props["paragraphAlign"] = TextPropsFactory.TextAlignToParagraphAlign(textAlign);
-                }
+                props["paragraphAlign"] = TextPropsFactory.TextAlignToParagraphAlign(textAlign);
                 break;
             case "paragraphalign":
                 props["paragraphAlign"] = RequireUInt16(controlName, propertyName, value);
@@ -1067,6 +1110,9 @@ internal static class RebuildPatchApplier
             case "autotab":
             case "multiline":
             case "integralheight":
+            case "columnheads":
+            case "matchrequired":
+            case "editable":
             case "takefocusonclick":
             case "tabstop":
             case "visible":
@@ -1082,9 +1128,28 @@ internal static class RebuildPatchApplier
             case "specialeffect":
             case "maxlength":
             case "scrollbars":
+            case "displaystyle":
+            case "listwidth":
+            case "boundcolumn":
+            case "textcolumn":
+            case "columncount":
+            case "listrows":
+            case "matchentry":
+            case "liststyle":
+            case "showdropbuttonwhen":
+            case "dropbuttonstyle":
+            case "multiselect":
             case "dragbehavior":
             case "enterfieldbehavior":
                 props[CanonicalPropertyName(propertyName)] = RequireInt32(controlName, propertyName, value);
+                break;
+            case "alignment":
+                var addAlignment = RequireInt32(controlName, propertyName, value);
+                if (addAlignment is < 0 or > 1)
+                {
+                    throw new CliException($"Property '{propertyName}' for '{controlName}' must be 0 or 1.");
+                }
+                props["alignment"] = addAlignment;
                 break;
             case "textalign":
                 var addTextAlign = RequireTextAlign(controlName, propertyName, value);
@@ -1096,6 +1161,9 @@ internal static class RebuildPatchApplier
                 break;
             case "accelerator":
                 props["accelerator"] = RequireString(controlName, propertyName, value);
+                break;
+            case "controlsource":
+                props["controlSource"] = RequireString(controlName, propertyName, value);
                 break;
             case "tabcaptions":
             case "tabnames":
@@ -1125,6 +1193,7 @@ internal static class RebuildPatchApplier
             "wordwrap" => "wordWrap",
             "autosize" => "autoSize",
             "backstyle" => "backStyle",
+            "alignment" => "alignment",
             "imemode" => "imeMode",
             "pictureposition" => "picturePosition",
             "mousepointer" => "mousePointer",
@@ -1133,6 +1202,17 @@ internal static class RebuildPatchApplier
             "maxlength" => "maxLength",
             "passwordchar" => "passwordChar",
             "scrollbars" => "scrollBars",
+            "displaystyle" => "displayStyle",
+            "listwidth" => "listWidth",
+            "boundcolumn" => "boundColumn",
+            "textcolumn" => "textColumn",
+            "columncount" => "columnCount",
+            "listrows" => "listRows",
+            "matchentry" => "matchEntry",
+            "liststyle" => "listStyle",
+            "showdropbuttonwhen" => "showDropButtonWhen",
+            "dropbuttonstyle" => "dropButtonStyle",
+            "multiselect" => "multiSelect",
             "dragbehavior" => "dragBehavior",
             "enterfieldbehavior" => "enterFieldBehavior",
             "enterkeybehavior" => "enterKeyBehavior",
@@ -1143,11 +1223,14 @@ internal static class RebuildPatchApplier
             "autotab" => "autoTab",
             "multiline" => "multiLine",
             "integralheight" => "integralHeight",
+            "columnheads" => "columnHeads",
+            "matchrequired" => "matchRequired",
             "takefocusonclick" => "takeFocusOnClick",
             "textalign" => "textAlign",
             "paragraphalign" => "paragraphAlign",
             "tabstop" => "tabStop",
             "controltiptext" => "controlTipText",
+            "controlsource" => "controlSource",
             "backcolor" => "backColor",
             "forecolor" => "foreColor",
             "bordercolor" => "borderColor",
@@ -1169,7 +1252,11 @@ internal static class RebuildPatchApplier
             "enabled" => 1,
             "locked" => 2,
             "backstyle" => 3,
+            "alignment" => 13,
             "integralheight" => 11,
+            "columnheads" => 10,
+            "matchrequired" => 12,
+            "editable" => 14,
             "dragbehavior" => 19,
             "enterkeybehavior" => 20,
             "enterfieldbehavior" => 21,
@@ -1211,11 +1298,18 @@ internal static class RebuildPatchApplier
             ? 0x0080_0013u
             : IsTextBox(props)
                 ? 0x2C80_481Bu
+            : IsControlType(props, "CheckBox")
+                ? 0x2C80_081Bu
+            : IsControlType(props, "OptionButton")
+                ? 0x0080_001Bu
             : 0x0000_001Bu;
 
     private static bool IsTextBox(Dictionary<string, object?> props) =>
+        IsControlType(props, "TextBox");
+
+    private static bool IsControlType(Dictionary<string, object?> props, string type) =>
         TryGetString(props, "controlType", out var controlType) &&
-        controlType.Equals("TextBox", StringComparison.OrdinalIgnoreCase);
+        controlType.Equals(type, StringComparison.OrdinalIgnoreCase);
 
     private static void SetSiteFlag(Dictionary<string, object?> props, string propertyName, bool value)
     {
@@ -1321,6 +1415,17 @@ internal static class RebuildPatchApplier
         if (parsed < 0)
         {
             throw new CliException($"Property '{propertyName}' for '{controlName}' must be a non-negative 32-bit integer.");
+        }
+
+        return parsed;
+    }
+
+    private static int RequireInt16(string controlName, string propertyName, JsonElement value)
+    {
+        var parsed = RequireInt32(controlName, propertyName, value);
+        if (parsed is < short.MinValue or > short.MaxValue)
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must be an integer between -32768 and 32767.");
         }
 
         return parsed;
