@@ -60,5 +60,10 @@
       "heightPt": 24,
       "caption": "Gamma"
     }
-  ]
+  ],
+  "code": {
+    "tabStripPanels": {
+      "TsSections": [ "FrameAlpha", "FrameBeta", "FrameGamma" ]
+    }
+  }
 }

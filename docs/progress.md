@@ -42,6 +42,8 @@
 - When an empty generated Page receives its first child, the rebuilder now appends the native 16-byte Page tail after `FormSiteData`, matching native MultiPage pages that contain controls.
 - Generated MultiPage `f` streams now include the native MultiPage tail after FormSiteData (`00020C0019000000F08F0000FF010000`), separate from the Page tail.
 - Added `CreateTabStripDemo` regression fixtures showing the correct standalone `TabStrip` usage: tabs select normal sibling `Frame` panels through VBA `TabStrip_Change`; `TabStrip` is not a storage/container owner.
+- Patch documents now support `code.tabStripPanels`, generating marked `.frm` VBA that connects a standalone `TabStrip` to sibling `Frame` panels.
+- Added `docs/property-edit-coverage.md` to distinguish strict parser/create coverage from true 100% property edit coverage.
 - Added a multi-stage `CreateTorture` regression that builds a 42-control form with root controls, nested frames, multipages, pages, and controls inside generated containers.
 - The previous `ObjectStreamRoundTripRewriter` build warnings have been resolved; current build is clean.
 - Added `MsFormsControlSchemaCatalog` as the internal checklist for spec section, parser, masks, TextProps, site flags, and factory readiness per control type.
@@ -67,9 +69,10 @@
 ## Next Targets
 
 1. Implement `Page` reorder under existing `MultiPage`, keeping `x`, inner TabStrip, internal sites, and page storages synchronized.
-2. Add strict validation that rejects common controls using `TabStrip` as `parent`; use sibling panels plus VBA or use `MultiPage` for real per-page containers.
-3. Run import validation in Corel and Office/VBA for generated-from-zero forms after the strict OLE storage checks.
-4. Add binary picture payload support for `Image` and picture-capable controls as the final feature layer.
+2. Build the public property schema/catalog described in `docs/property-edit-coverage.md`, including mask/default promotion rules.
+3. Add strict validation that rejects common controls using `TabStrip` as `parent`; use sibling panels plus VBA or use `MultiPage` for real per-page containers.
+4. Run import validation in Corel and Office/VBA for generated-from-zero forms after the strict OLE storage checks.
+5. Add binary picture payload support for `Image` and picture-capable controls as the final feature layer.
 
 ## Working Rule
 

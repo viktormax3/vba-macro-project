@@ -1559,6 +1559,11 @@ internal static class ObjectStreamRoundTripRewriter
             WriteUInt16ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, tabIndexFileOffset, tabIndex, $"{control.Name}.tabIndex");
         }
 
+        if (TryGetInt(props, "siteBitFlagsRaw", out var siteBitFlags) && TryGetInt(props, "siteBitFlagsRawOffset", out var siteBitFlagsFileOffset))
+        {
+            WriteUInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, siteBitFlagsFileOffset, siteBitFlags, $"{control.Name}.BitFlags");
+        }
+
         if (TryGetInt(props, "siteId", out var siteId) && TryGetInt(props, "siteIdOffset", out var siteIdFileOffset))
         {
             WriteUInt32ByFileOffsetToSlice(sourceFormStream, site, siteStartLocalOffset, siteIdFileOffset, siteId, $"{control.Name}.ID");

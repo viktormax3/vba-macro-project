@@ -1,0 +1,25 @@
+{
+  "properties": {
+    "BtnCommandFull": {
+      "caption": "Edited command",
+      "foreColor": "&H80000006&",
+      "backColor": "&H8000000D&",
+      "enabled": true,
+      "locked": false,
+      "backStyle": 1,
+      "wordWrap": false,
+      "autoSize": false,
+      "imeMode": 0,
+      "picturePosition": 458753,
+      "mousePointer": 0,
+      "accelerator": "",
+      "takeFocusOnClick": true,
+      "tabStop": true,
+      "visible": true,
+      "default": false,
+      "cancel": false,
+      "fontName": "Tahoma",
+      "fontSize": 8.25
+    }
+  }
+}

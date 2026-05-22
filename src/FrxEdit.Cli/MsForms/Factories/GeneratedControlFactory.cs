@@ -73,9 +73,30 @@ internal static class GeneratedControlFactory
             left,
             top,
             objectPayload.Length,
-            schema.SiteFlags);
+            BuildSiteFlags(schema.SiteFlags, properties));
 
         return new GeneratedControlBytes(sitePayload, objectPayload, schema.BuildMetadata(request, objectPayload.Length));
+    }
+
+    private static uint BuildSiteFlags(uint defaults, Dictionary<string, object?> properties)
+    {
+        var flags = defaults;
+        SetFlag(ref flags, 0, MsFormsFactoryBinary.GetBool(properties, "tabStop"));
+        SetFlag(ref flags, 1, MsFormsFactoryBinary.GetBool(properties, "visible"));
+        SetFlag(ref flags, 2, MsFormsFactoryBinary.GetBool(properties, "default"));
+        SetFlag(ref flags, 3, MsFormsFactoryBinary.GetBool(properties, "cancel"));
+        return flags;
+    }
+
+    private static void SetFlag(ref uint flags, int bit, bool? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        var mask = 1u << bit;
+        flags = value.Value ? flags | mask : flags & ~mask;
     }
 
     private static bool TryGetSchema(string type, out IGeneratedControlSchema schema)

@@ -1,0 +1,14 @@
+{
+  "add": [
+    {
+      "type": "Label",
+      "name": "LblBadTabChild",
+      "parent": "TsSections",
+      "leftPt": 12,
+      "topPt": 12,
+      "widthPt": 80,
+      "heightPt": 14,
+      "caption": "Bad"
+    }
+  ]
+}

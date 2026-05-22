@@ -107,6 +107,9 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+        var targetLayout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode);
+        VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
+        updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
         UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch.Renames, patch.Remove);
 
@@ -149,6 +152,10 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         var targetLayout = patch is null
             ? sourceLayout
             : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch);
+        if (patch is not null)
+        {
+            VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
+        }
 
         var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, streamMode);
 
@@ -158,6 +165,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+        updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch?.Code);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
         var removedScopeNames = targetLayout.RemovedControls?.Select(control => control.Name).ToList() ?? patch?.Remove;
         UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames, removedScopeNames);
@@ -215,11 +223,13 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             PatchValidator.Validate(patch, sourceLayout.Controls);
             RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true);
             var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true);
+            VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
             var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, RebuildStreamMode.FormAndObjectPatch);
             File.WriteAllBytes(outFrxPath, rebuiltBytes);
 
             var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
             updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+            updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
             File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
         }
 

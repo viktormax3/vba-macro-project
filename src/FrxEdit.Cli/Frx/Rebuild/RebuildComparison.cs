@@ -58,8 +58,8 @@ internal sealed record RebuildComparison(
             object? sourceValue = null;
             object? rebuiltValue = null;
 
-            source.Properties?.TryGetValue(propertyName, out sourceValue);
-            rebuilt.Properties?.TryGetValue(propertyName, out rebuiltValue);
+            sourceValue = ComparablePropertyValue(source, propertyName);
+            rebuiltValue = ComparablePropertyValue(rebuilt, propertyName);
 
             if (sourceValue is null && rebuiltValue is null)
             {
@@ -73,6 +73,22 @@ internal sealed record RebuildComparison(
                 differences.Add($"{key}.{propertyName}: {sourceJson} != {rebuiltJson}");
             }
         }
+    }
+
+    private static object? ComparablePropertyValue(ControlInfo control, string propertyName)
+    {
+        if (control.Properties?.TryGetValue(propertyName, out var value) is true)
+        {
+            return value;
+        }
+
+        return (control.Type, propertyName) switch
+        {
+            ("TextBox", "backColor") => "&H80000005&",
+            ("TextBox", "foreColor") => "&H80000008&",
+            ("TextBox", "borderColor") => "&H80000006&",
+            _ => null
+        };
     }
 
     private static void CompareValue<T>(string key, string name, T? source, T? rebuilt, List<string> differences)

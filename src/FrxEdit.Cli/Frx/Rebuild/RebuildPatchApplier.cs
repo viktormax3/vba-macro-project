@@ -9,13 +9,44 @@ internal static class RebuildPatchApplier
         "fontSize",
         "backColor",
         "foreColor",
-        "borderColor"
+        "borderColor",
+        "enabled",
+        "locked",
+        "backStyle",
+        "wordWrap",
+        "autoSize",
+        "imeMode",
+        "picturePosition",
+        "mousePointer",
+        "accelerator",
+        "takeFocusOnClick",
+        "borderStyle",
+        "specialEffect",
+        "textAlign",
+        "paragraphAlign",
+        "maxLength",
+        "passwordChar",
+        "scrollBars",
+        "dragBehavior",
+        "enterFieldBehavior",
+        "enterKeyBehavior",
+        "tabKeyBehavior",
+        "selectionMargin",
+        "autoWordSelect",
+        "hideSelection",
+        "autoTab",
+        "multiLine",
+        "integralHeight"
     };
 
     private static readonly HashSet<string> FormSitePropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "tabIndex",
-        "controlTipText"
+        "controlTipText",
+        "tabStop",
+        "visible",
+        "default",
+        "cancel"
     };
 
     public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false)
@@ -356,6 +387,11 @@ internal static class RebuildPatchApplier
         var parentControl = controls.FirstOrDefault(c => c.Name.Equals(parent, StringComparison.OrdinalIgnoreCase))
             ?? throw new CliException($"Target parent '{parent}' does not exist.");
 
+        if (parentControl.Type.Equals("TabStrip", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CliException($"Target parent '{parent}' is a TabStrip. TabStrip is a selector, not a child-control container; use sibling Frame panels plus code.tabStripPanels or use MultiPage.");
+        }
+
         if (!IsStorageParentType(parentControl.Type) || parentControl.Type.Equals("MultiPage", StringComparison.OrdinalIgnoreCase))
         {
             throw new CliException($"Target parent '{parent}' is type '{parentControl.Type}'. This pass supports adding/moving common controls into root, Frame, or Page containers only.");
@@ -541,7 +577,7 @@ internal static class RebuildPatchApplier
 
             foreach (var (propertyName, value) in add.Properties ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase))
             {
-                ApplyPropertyToDictionary(name, props, propertyName, value);
+                ApplyAddPropertyToDictionary(name, props, propertyName, value);
             }
 
             var left = add.Left ?? ToRawPoints(add.LeftPt) ?? template?.Left ?? 0;
@@ -899,6 +935,10 @@ internal static class RebuildPatchApplier
             case "fontname":
                 props[CanonicalPropertyName(propertyName)] = RequireString(controlName, propertyName, value);
                 break;
+            case "passwordchar":
+                var passwordChar = RequireString(controlName, propertyName, value);
+                props["passwordChar"] = passwordChar.Length == 0 ? string.Empty : passwordChar[0].ToString();
+                break;
             case "tabcaptions":
             case "tabnames":
             case "pagenames":
@@ -922,11 +962,150 @@ internal static class RebuildPatchApplier
                 props["fontSize"] = size;
                 props["fontHeightRaw"] = (int)Math.Round(size * 20.0, MidpointRounding.AwayFromZero);
                 break;
+            case "enabled":
+            case "locked":
+            case "wordwrap":
+            case "autosize":
+            case "enterkeybehavior":
+            case "tabkeybehavior":
+            case "selectionmargin":
+            case "autowordselect":
+            case "hideselection":
+            case "autotab":
+            case "multiline":
+            case "integralheight":
+                SetVariousPropertyBit(props, propertyName, RequireBoolean(controlName, propertyName, value));
+                break;
+            case "backstyle":
+                SetVariousPropertyBit(props, propertyName, RequireUInt16(controlName, propertyName, value) != 0);
+                props["backStyle"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "imemode":
+                SetImeMode(props, RequireUInt16(controlName, propertyName, value));
+                break;
+            case "pictureposition":
+                props["picturePosition"] = RequireInt32(controlName, propertyName, value);
+                break;
+            case "mousepointer":
+                props["mousePointer"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "maxlength":
+                props["maxLength"] = RequireNonNegativeInt32(controlName, propertyName, value);
+                break;
+            case "scrollbars":
+                props["scrollBars"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "dragbehavior":
+            case "enterfieldbehavior":
+                var behaviorValue = RequireUInt16(controlName, propertyName, value);
+                SetVariousPropertyBit(props, propertyName, behaviorValue != 0);
+                props[CanonicalPropertyName(propertyName)] = behaviorValue;
+                break;
+            case "borderstyle":
+                props["borderStyle"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "specialeffect":
+                props["specialEffect"] = RequireUInt16(controlName, propertyName, value);
+                break;
+            case "textalign":
+                var textAlign = RequireTextAlign(controlName, propertyName, value);
+                props["textAlign"] = TextPropsFactory.TextAlignName(textAlign);
+                if (IsTextBox(props))
+                {
+                    props["textAlignRaw"] = textAlign;
+                }
+                else
+                {
+                    props["paragraphAlign"] = TextPropsFactory.TextAlignToParagraphAlign(textAlign);
+                }
+                break;
+            case "paragraphalign":
+                props["paragraphAlign"] = RequireUInt16(controlName, propertyName, value);
+                props["textAlign"] = TextPropsFactory.ParagraphAlignToTextAlign((int)props["paragraphAlign"]!);
+                break;
+            case "accelerator":
+                var accelerator = RequireString(controlName, propertyName, value);
+                props["accelerator"] = accelerator.Length == 0 ? string.Empty : accelerator[0].ToString();
+                if (accelerator.Length > 0)
+                {
+                    props["acceleratorCode"] = (int)accelerator[0];
+                }
+                break;
+            case "takefocusonclick":
+                props["takeFocusOnClick"] = RequireBoolean(controlName, propertyName, value);
+                break;
             case "tabindex":
                 props["tabIndex"] = RequireUInt16(controlName, propertyName, value);
                 break;
+            case "tabstop":
+            case "visible":
+            case "default":
+            case "cancel":
+                SetSiteFlag(props, propertyName, RequireBoolean(controlName, propertyName, value));
+                break;
             default:
                 throw new CliException($"Property '{propertyName}' is not supported by rebuild patch.");
+        }
+    }
+
+    private static void ApplyAddPropertyToDictionary(string controlName, Dictionary<string, object?> props, string propertyName, JsonElement value)
+    {
+        switch (propertyName.ToLowerInvariant())
+        {
+            case "orientation":
+                props["orientation"] = RequireInt32(controlName, propertyName, value);
+                break;
+            case "enabled":
+            case "locked":
+            case "wordwrap":
+            case "autosize":
+            case "enterkeybehavior":
+            case "tabkeybehavior":
+            case "selectionmargin":
+            case "autowordselect":
+            case "hideselection":
+            case "autotab":
+            case "multiline":
+            case "integralheight":
+            case "takefocusonclick":
+            case "tabstop":
+            case "visible":
+            case "default":
+            case "cancel":
+                props[CanonicalPropertyName(propertyName)] = RequireBoolean(controlName, propertyName, value);
+                break;
+            case "backstyle":
+            case "imemode":
+            case "pictureposition":
+            case "mousepointer":
+            case "borderstyle":
+            case "specialeffect":
+            case "maxlength":
+            case "scrollbars":
+            case "dragbehavior":
+            case "enterfieldbehavior":
+                props[CanonicalPropertyName(propertyName)] = RequireInt32(controlName, propertyName, value);
+                break;
+            case "textalign":
+                var addTextAlign = RequireTextAlign(controlName, propertyName, value);
+                props["textAlign"] = TextPropsFactory.TextAlignName(addTextAlign);
+                props["paragraphAlign"] = TextPropsFactory.TextAlignToParagraphAlign(addTextAlign);
+                break;
+            case "paragraphalign":
+                props["paragraphAlign"] = RequireInt32(controlName, propertyName, value);
+                break;
+            case "accelerator":
+                props["accelerator"] = RequireString(controlName, propertyName, value);
+                break;
+            case "tabcaptions":
+            case "tabnames":
+            case "pagenames":
+            case "pagecaptions":
+                props[CanonicalPropertyName(propertyName)] = RequireStringArray(controlName, propertyName, value);
+                break;
+            default:
+                ApplyPropertyToDictionary(controlName, props, propertyName, value);
+                break;
         }
     }
 
@@ -943,6 +1122,31 @@ internal static class RebuildPatchApplier
         {
             "groupname" => "groupName",
             "fontname" => "fontName",
+            "wordwrap" => "wordWrap",
+            "autosize" => "autoSize",
+            "backstyle" => "backStyle",
+            "imemode" => "imeMode",
+            "pictureposition" => "picturePosition",
+            "mousepointer" => "mousePointer",
+            "borderstyle" => "borderStyle",
+            "specialeffect" => "specialEffect",
+            "maxlength" => "maxLength",
+            "passwordchar" => "passwordChar",
+            "scrollbars" => "scrollBars",
+            "dragbehavior" => "dragBehavior",
+            "enterfieldbehavior" => "enterFieldBehavior",
+            "enterkeybehavior" => "enterKeyBehavior",
+            "tabkeybehavior" => "tabKeyBehavior",
+            "selectionmargin" => "selectionMargin",
+            "autowordselect" => "autoWordSelect",
+            "hideselection" => "hideSelection",
+            "autotab" => "autoTab",
+            "multiline" => "multiLine",
+            "integralheight" => "integralHeight",
+            "takefocusonclick" => "takeFocusOnClick",
+            "textalign" => "textAlign",
+            "paragraphalign" => "paragraphAlign",
+            "tabstop" => "tabStop",
             "controltiptext" => "controlTipText",
             "backcolor" => "backColor",
             "forecolor" => "foreColor",
@@ -953,6 +1157,86 @@ internal static class RebuildPatchApplier
             "pagecaptions" => "pageCaptions",
             _ => propertyName
         };
+
+    private static void SetVariousPropertyBit(Dictionary<string, object?> props, string propertyName, bool value)
+    {
+        var bits = TryGetInt(props, "variousPropertyBitsRaw", out var current)
+            ? unchecked((uint)current)
+            : DefaultVariousPropertyBits(props);
+
+        var bit = propertyName.ToLowerInvariant() switch
+        {
+            "enabled" => 1,
+            "locked" => 2,
+            "backstyle" => 3,
+            "integralheight" => 11,
+            "dragbehavior" => 19,
+            "enterkeybehavior" => 20,
+            "enterfieldbehavior" => 21,
+            "tabkeybehavior" => 22,
+            "wordwrap" => 23,
+            "selectionmargin" => 26,
+            "autowordselect" => 27,
+            "autosize" => 28,
+            "hideselection" => 29,
+            "autotab" => 30,
+            "multiline" => 31,
+            _ => throw new CliException($"Property '{propertyName}' is not a supported VariousPropertyBits field.")
+        };
+
+        var mask = 1u << bit;
+        bits = value ? bits | mask : bits & ~mask;
+        props["variousPropertyBitsRaw"] = unchecked((int)bits);
+        props[CanonicalPropertyName(propertyName)] = value;
+    }
+
+    private static void SetImeMode(Dictionary<string, object?> props, int imeMode)
+    {
+        if (imeMode is < 0 or > 15)
+        {
+            throw new CliException("Property 'imeMode' must be between 0 and 15.");
+        }
+
+        var bits = TryGetInt(props, "variousPropertyBitsRaw", out var current)
+            ? unchecked((uint)current)
+            : DefaultVariousPropertyBits(props);
+        bits &= ~(0xFu << 15);
+        bits |= ((uint)imeMode & 0xFu) << 15;
+        props["variousPropertyBitsRaw"] = unchecked((int)bits);
+        props["imeMode"] = imeMode;
+    }
+
+    private static uint DefaultVariousPropertyBits(Dictionary<string, object?> props) =>
+        TryGetString(props, "parser", out var parser) && parser.Equals("msOFormsLabel", StringComparison.OrdinalIgnoreCase)
+            ? 0x0080_0013u
+            : IsTextBox(props)
+                ? 0x2C80_481Bu
+            : 0x0000_001Bu;
+
+    private static bool IsTextBox(Dictionary<string, object?> props) =>
+        TryGetString(props, "controlType", out var controlType) &&
+        controlType.Equals("TextBox", StringComparison.OrdinalIgnoreCase);
+
+    private static void SetSiteFlag(Dictionary<string, object?> props, string propertyName, bool value)
+    {
+        var flags = TryGetInt(props, "siteBitFlagsRaw", out var current)
+            ? unchecked((uint)current)
+            : 0x0000_0013;
+
+        var bit = propertyName.ToLowerInvariant() switch
+        {
+            "tabstop" => 0,
+            "visible" => 1,
+            "default" => 2,
+            "cancel" => 3,
+            _ => throw new CliException($"Property '{propertyName}' is not a supported SITE_FLAG field.")
+        };
+
+        var mask = 1u << bit;
+        flags = value ? flags | mask : flags & ~mask;
+        props["siteBitFlagsRaw"] = unchecked((int)flags);
+        props[CanonicalPropertyName(propertyName)] = value;
+    }
 
     private static string RequireString(string controlName, string propertyName, JsonElement value)
     {
@@ -1019,6 +1303,56 @@ internal static class RebuildPatchApplier
         }
 
         return parsed;
+    }
+
+    private static int RequireInt32(string controlName, string propertyName, JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var parsed))
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must be a 32-bit integer.");
+        }
+
+        return parsed;
+    }
+
+    private static int RequireNonNegativeInt32(string controlName, string propertyName, JsonElement value)
+    {
+        var parsed = RequireInt32(controlName, propertyName, value);
+        if (parsed < 0)
+        {
+            throw new CliException($"Property '{propertyName}' for '{controlName}' must be a non-negative 32-bit integer.");
+        }
+
+        return parsed;
+    }
+
+    private static bool RequireBoolean(string controlName, string propertyName, JsonElement value)
+    {
+        if (value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return value.GetBoolean();
+        }
+
+        throw new CliException($"Property '{propertyName}' for '{controlName}' must be true or false.");
+    }
+
+    private static int RequireTextAlign(string controlName, string propertyName, JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.String &&
+            TextPropsFactory.TryParseTextAlign(value.GetString() ?? string.Empty, out var named) &&
+            named is >= 1 and <= 3)
+        {
+            return named;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out var numeric) &&
+            numeric is >= 1 and <= 3)
+        {
+            return numeric;
+        }
+
+        throw new CliException($"Property '{propertyName}' for '{controlName}' must be 'left', 'center', 'right', or an integer from 1 to 3.");
     }
 
     private static double RequireFontSize(string controlName, JsonElement value)

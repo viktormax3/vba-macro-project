@@ -89,7 +89,8 @@ internal static class TextPropsParser
 
         if (MsFormsBinary.HasBit(propMask, 6))
         {
-            properties["paragraphAlign"] = MsFormsBinary.ReadByte(data, fileOffsets, ref cursor, "paragraphAlign", properties);
+            var paragraphAlign = MsFormsBinary.ReadByte(data, fileOffsets, ref cursor, "paragraphAlign", properties);
+            properties["textAlign"] = TextPropsFactory.TextAlignName(TextPropsFactory.ParagraphAlignToTextAlign(paragraphAlign));
         }
 
         if (MsFormsBinary.HasBit(propMask, 7))

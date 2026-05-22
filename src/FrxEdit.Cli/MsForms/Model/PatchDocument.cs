@@ -6,6 +6,12 @@ internal sealed class PatchDocument
     public List<string>? Remove { get; set; }
     public Dictionary<string, string?>? Move { get; set; }
     public List<AddControlPatch>? Add { get; set; }
+    public CodePatch? Code { get; set; }
+}
+
+internal sealed class CodePatch
+{
+    public Dictionary<string, List<string>>? TabStripPanels { get; set; }
 }
 
 internal sealed class LayoutPatch

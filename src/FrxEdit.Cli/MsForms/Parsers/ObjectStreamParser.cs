@@ -961,7 +961,11 @@ internal static class ObjectStreamParser
             groupNameCount = MsFormsBinary.DecodeCountOfBytesWithCompressionFlag(MsFormsBinary.ReadAlignedUInt32(data, stream.FileOffsets, ref cursor, 4, "groupNameCount", properties));
             groupNameCountLocalOffset = LocalOffsetOf(properties, "groupNameCount");
         }
-        if (MsFormsBinary.HasBit64(propMask, 33)) properties["textAlign"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "textAlign", properties);
+        if (MsFormsBinary.HasBit64(propMask, 33))
+        {
+            var textAlign = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "textAlignRaw", properties);
+            properties["textAlign"] = TextPropsFactory.TextAlignName(textAlign);
+        }
         if (MsFormsBinary.HasBit64(propMask, 34)) properties["dropEffect"] = MsFormsBinary.ReadByte(data, stream.FileOffsets, ref cursor, "dropEffect", properties);
 
         int? width = null;

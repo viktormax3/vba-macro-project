@@ -119,6 +119,24 @@ internal static class MsFormsFactoryBinary
         };
     }
 
+    public static bool? GetBool(Dictionary<string, object?> properties, string name)
+    {
+        if (!properties.TryGetValue(name, out var value) || value is null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            bool b => b,
+            JsonElement element when element.ValueKind is JsonValueKind.True or JsonValueKind.False => element.GetBoolean(),
+            string text when bool.TryParse(text, out var b) => b,
+            string text when int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) => i != 0,
+            int i => i != 0,
+            _ => null
+        };
+    }
+
     public static IReadOnlyList<string>? GetStringList(Dictionary<string, object?> properties, string name)
     {
         if (!properties.TryGetValue(name, out var value) || value is null)

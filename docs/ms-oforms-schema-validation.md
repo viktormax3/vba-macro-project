@@ -110,3 +110,5 @@ Latest torture regression:
 - Generated MultiPage storages now append the native MultiPage tail `00020C0019000000F08F0000FF010000`; this matches `CreateTortureEditado`/native MultiPage `f` streams.
 - Standalone `TabStrip` acceptance: `out/CreateTabStripDemo.frm` strict-validates with 10 controls; `TsSections` has captions `Alpha|Beta|Gamma`, names `TabAlpha|TabBeta|TabGamma`, and all tab flags `0x00000003`.
 - `TabStrip` is a selector, not a child-control container. The demo uses sibling Frame panels plus VBA `TsSections_Change` to switch visibility.
+- `code.tabStripPanels` can now generate that VBA from a patch document; see `examples/create-tabstrip-demo-stage2.patch.json`.
+- Full property-edit coverage is tracked separately in `docs/property-edit-coverage.md`; current coverage is strong for creation/strict parsing, but not yet 100% for every optional MS-OFORMS property.

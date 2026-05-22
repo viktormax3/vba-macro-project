@@ -383,6 +383,12 @@ internal static class StructuredMsFormsParser
                 site.BitFlags = ReadUInt32(data, ref dataCursor, siteStart, siteEnd);
                 site.ExtraProperties["siteBitFlagsRaw"] = site.BitFlags;
                 site.ExtraProperties["siteBitFlagsRawOffset"] = stream.FileOffsets.Length > site.BitFlagsOffset ? stream.FileOffsets[site.BitFlagsOffset] : 0;
+                site.ExtraProperties["tabStop"] = (site.BitFlags & (1u << 0)) != 0;
+                site.ExtraProperties["visible"] = (site.BitFlags & (1u << 1)) != 0;
+                site.ExtraProperties["default"] = (site.BitFlags & (1u << 2)) != 0;
+                site.ExtraProperties["cancel"] = (site.BitFlags & (1u << 3)) != 0;
+                site.ExtraProperties["streamed"] = (site.BitFlags & (1u << 4)) != 0;
+                site.ExtraProperties["siteAutoSize"] = (site.BitFlags & (1u << 5)) != 0;
             }
 
             if (mask.HasObjectStreamSize)

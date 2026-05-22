@@ -8,6 +8,11 @@ internal interface IGeneratedControlSchema
 
 internal sealed class CommandButtonControlSchema : IGeneratedControlSchema
 {
+    private const uint DefaultForeColor = 0x8000_0012;
+    private const uint DefaultBackColor = 0x8000_000F;
+    private const uint DefaultVariousPropertyBits = 0x0000_001B;
+    private const uint DefaultPicturePosition = 0x0007_0001;
+
     public string Type => "CommandButton";
     public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
 
@@ -15,16 +20,49 @@ internal sealed class CommandButtonControlSchema : IGeneratedControlSchema
     {
         var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
         var captionBytes = Encoding.Latin1.GetBytes(caption);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var picturePosition = MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition");
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer");
+        var accelerator = MsFormsFactoryBinary.GetString(request.Properties, "accelerator");
+        var takeFocusOnClick = MsFormsFactoryBinary.GetBool(request.Properties, "takeFocusOnClick");
+
+        uint propMask = 0x0000_0028; // Caption + Size.
+        if (foreColor != DefaultForeColor) propMask |= 1u << 0;
+        if (backColor != DefaultBackColor) propMask |= 1u << 1;
+        if (variousBits != DefaultVariousPropertyBits) propMask |= 1u << 2;
+        if (picturePosition is not null && unchecked((uint)picturePosition.Value) != DefaultPicturePosition) propMask |= 1u << 4;
+        if (mousePointer is not null && mousePointer.Value != 0) propMask |= 1u << 6;
+        if (!string.IsNullOrEmpty(accelerator)) propMask |= 1u << 8;
+        if (takeFocusOnClick is false) propMask |= 1u << 9;
 
         using var dataBlock = new MemoryStream();
+        if ((propMask & (1u << 0)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
+        if ((propMask & (1u << 1)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
+        if ((propMask & (1u << 2)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, variousBits);
         MsFormsFactoryBinary.WriteCount(dataBlock, captionBytes.Length);
+        if ((propMask & (1u << 4)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)picturePosition!.Value));
+        if ((propMask & (1u << 6)) != 0)
+        {
+            dataBlock.WriteByte(checked((byte)mousePointer!.Value));
+            MsFormsFactoryBinary.WritePadding(dataBlock, 2);
+        }
+
+        if ((propMask & (1u << 8)) != 0)
+        {
+            var code = string.IsNullOrEmpty(accelerator) ? 0 : accelerator![0];
+            MsFormsFactoryBinary.WriteUInt16(dataBlock, code);
+        }
+
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
 
         using var extra = new MemoryStream();
         extra.Write(captionBytes);
         MsFormsFactoryBinary.WritePadding(extra, 4);
         MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
 
-        var control = MsFormsFactoryBinary.BuildVersionedControl(0, 2, 0x0000_0028, dataBlock.ToArray(), extra.ToArray());
+        var control = MsFormsFactoryBinary.BuildVersionedControl(0, 2, propMask, dataBlock.ToArray(), extra.ToArray());
         var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.CommandButtonMask);
         return [.. control, .. textProps];
     }
@@ -32,21 +70,90 @@ internal sealed class CommandButtonControlSchema : IGeneratedControlSchema
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
         var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.CommandButtonMask, request.Properties);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var propMask = 0x0000_0028u;
+        if (foreColor != DefaultForeColor) propMask |= 1u << 0;
+        if (backColor != DefaultBackColor) propMask |= 1u << 1;
+        if (variousBits != DefaultVariousPropertyBits) propMask |= 1u << 2;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition") is int picturePosition && unchecked((uint)picturePosition) != DefaultPicturePosition) propMask |= 1u << 4;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") is int mousePointer && mousePointer != 0) propMask |= 1u << 6;
+        if (!string.IsNullOrEmpty(MsFormsFactoryBinary.GetString(request.Properties, "accelerator"))) propMask |= 1u << 8;
+        if (MsFormsFactoryBinary.GetBool(request.Properties, "takeFocusOnClick") is false) propMask |= 1u << 9;
+
         metadata["caption"] = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
         metadata["sizeSource"] = "commandButtonExtraDataBlock";
         metadata["parser"] = "msOFormsCommandButton";
-        metadata["commandButtonPropMask"] = "0x00000028";
+        metadata["commandButtonPropMask"] = $"0x{propMask:X8}";
+        metadata["variousPropertyBitsRaw"] = unchecked((int)variousBits);
+        metadata["enabled"] = (variousBits & (1u << 1)) != 0;
+        metadata["locked"] = (variousBits & (1u << 2)) != 0;
+        metadata["backStyle"] = (variousBits & (1u << 3)) != 0 ? 1 : 0;
+        metadata["wordWrap"] = (variousBits & (1u << 23)) != 0;
+        metadata["autoSize"] = (variousBits & (1u << 28)) != 0;
+        metadata["foreColor"] = $"&H{foreColor:X8}&";
+        metadata["backColor"] = $"&H{backColor:X8}&";
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition") is int picturePositionValue) metadata["picturePosition"] = picturePositionValue;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") is int mousePointerValue) metadata["mousePointer"] = mousePointerValue;
+        if (MsFormsFactoryBinary.GetString(request.Properties, "accelerator") is { Length: > 0 } accelerator) metadata["accelerator"] = accelerator[0].ToString();
+        metadata["takeFocusOnClick"] = MsFormsFactoryBinary.GetBool(request.Properties, "takeFocusOnClick") ?? true;
         metadata["objectStreamSize"] = objectPayloadSize;
-        metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
-        metadata["tabStop"] = true;
-        metadata["visible"] = true;
+        metadata["siteBitFlags"] = $"0x{BuildSiteFlags(request.Properties):X8}";
+        metadata["tabStop"] = MsFormsFactoryBinary.GetBool(request.Properties, "tabStop") ?? true;
+        metadata["visible"] = MsFormsFactoryBinary.GetBool(request.Properties, "visible") ?? true;
+        metadata["default"] = MsFormsFactoryBinary.GetBool(request.Properties, "default") ?? false;
+        metadata["cancel"] = MsFormsFactoryBinary.GetBool(request.Properties, "cancel") ?? false;
         metadata["streamed"] = true;
         return metadata;
+    }
+
+    private static uint BuildVariousPropertyBits(Dictionary<string, object?> properties)
+    {
+        var bits = DefaultVariousPropertyBits;
+        SetBit(ref bits, 1, MsFormsFactoryBinary.GetBool(properties, "enabled"));
+        SetBit(ref bits, 2, MsFormsFactoryBinary.GetBool(properties, "locked"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "backStyle") is int backStyle)
+        {
+            SetBit(ref bits, 3, backStyle != 0);
+        }
+        SetBit(ref bits, 23, MsFormsFactoryBinary.GetBool(properties, "wordWrap"));
+        SetBit(ref bits, 28, MsFormsFactoryBinary.GetBool(properties, "autoSize"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "imeMode") is int imeMode)
+        {
+            bits &= ~(0xFu << 15);
+            bits |= ((uint)imeMode & 0xFu) << 15;
+        }
+
+        return bits;
+    }
+
+    private static uint BuildSiteFlags(Dictionary<string, object?> properties)
+    {
+        var flags = 0x0000_0013u;
+        SetBit(ref flags, 0, MsFormsFactoryBinary.GetBool(properties, "tabStop"));
+        SetBit(ref flags, 1, MsFormsFactoryBinary.GetBool(properties, "visible"));
+        SetBit(ref flags, 2, MsFormsFactoryBinary.GetBool(properties, "default"));
+        SetBit(ref flags, 3, MsFormsFactoryBinary.GetBool(properties, "cancel"));
+        return flags;
+    }
+
+    private static void SetBit(ref uint bits, int bit, bool? value)
+    {
+        if (value is null) return;
+        var mask = 1u << bit;
+        bits = value.Value ? bits | mask : bits & ~mask;
     }
 }
 
 internal sealed class LabelControlSchema : IGeneratedControlSchema
 {
+    private const uint DefaultForeColor = 0x8000_0012;
+    private const uint DefaultBackColor = 0x8000_000F;
+    private const uint DefaultBorderColor = 0x8000_0006;
+    private const uint DefaultVariousPropertyBits = 0x0080_0013;
+    private const uint DefaultPicturePosition = 0x0007_0001;
+
     public string Type => "Label";
     public uint SiteFlags => 0x0000_0032; // visible + streamed + autoSize, no tabStop.
 
@@ -54,27 +161,91 @@ internal sealed class LabelControlSchema : IGeneratedControlSchema
     {
         var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
         var captionBytes = Encoding.Latin1.GetBytes(caption);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var borderColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "borderColor"), DefaultBorderColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var picturePosition = MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition");
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer");
+        var borderStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle");
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect");
+        var accelerator = MsFormsFactoryBinary.GetString(request.Properties, "accelerator");
+
+        uint propMask = 0x0000_0028; // Caption + Size.
+        if (foreColor != DefaultForeColor) propMask |= 1u << 0;
+        if (backColor != DefaultBackColor) propMask |= 1u << 1;
+        if (variousBits != DefaultVariousPropertyBits) propMask |= 1u << 2;
+        if (picturePosition is not null && unchecked((uint)picturePosition.Value) != DefaultPicturePosition) propMask |= 1u << 4;
+        if (mousePointer is not null && mousePointer.Value != 0) propMask |= 1u << 6;
+        if (borderColor != DefaultBorderColor) propMask |= 1u << 7;
+        if (borderStyle is not null && borderStyle.Value != 0) propMask |= 1u << 8;
+        if (specialEffect is not null && specialEffect.Value != 0) propMask |= 1u << 9;
+        if (!string.IsNullOrEmpty(accelerator)) propMask |= 1u << 11;
 
         using var dataBlock = new MemoryStream();
+        if ((propMask & (1u << 0)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
+        if ((propMask & (1u << 1)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
+        if ((propMask & (1u << 2)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, variousBits);
         MsFormsFactoryBinary.WriteCount(dataBlock, captionBytes.Length);
+        if ((propMask & (1u << 4)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)picturePosition!.Value));
+        if ((propMask & (1u << 6)) != 0)
+        {
+            dataBlock.WriteByte(checked((byte)mousePointer!.Value));
+            MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+        }
+        if ((propMask & (1u << 7)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, borderColor);
+        if ((propMask & (1u << 8)) != 0) MsFormsFactoryBinary.WriteUInt16(dataBlock, borderStyle!.Value);
+        if ((propMask & (1u << 9)) != 0) MsFormsFactoryBinary.WriteUInt16(dataBlock, specialEffect!.Value);
+        if ((propMask & (1u << 11)) != 0) MsFormsFactoryBinary.WriteUInt16(dataBlock, accelerator![0]);
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
 
         using var extra = new MemoryStream();
         extra.Write(captionBytes);
         MsFormsFactoryBinary.WritePadding(extra, 4);
         MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
 
-        var control = MsFormsFactoryBinary.BuildVersionedControl(0, 2, 0x0000_0028, dataBlock.ToArray(), extra.ToArray());
-        var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
+        var control = MsFormsFactoryBinary.BuildVersionedControl(0, 2, propMask, dataBlock.ToArray(), extra.ToArray());
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, request.Properties);
+        var textProps = TextPropsFactory.Build(request.Properties, textPropsMask);
         return [.. control, .. textProps];
     }
 
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
-        var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
+        var textPropsMask = TextPropsFactory.WithParagraphAlignIfNeeded(TextPropsFactory.StandardMask, request.Properties);
+        var metadata = TextPropsFactory.BuildMetadata(textPropsMask, request.Properties);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var borderColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "borderColor"), DefaultBorderColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        uint propMask = 0x0000_0028;
+        if (foreColor != DefaultForeColor) propMask |= 1u << 0;
+        if (backColor != DefaultBackColor) propMask |= 1u << 1;
+        if (variousBits != DefaultVariousPropertyBits) propMask |= 1u << 2;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition") is int picturePosition && unchecked((uint)picturePosition) != DefaultPicturePosition) propMask |= 1u << 4;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") is int mousePointer && mousePointer != 0) propMask |= 1u << 6;
+        if (borderColor != DefaultBorderColor) propMask |= 1u << 7;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle") is int borderStyle && borderStyle != 0) propMask |= 1u << 8;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") is int specialEffect && specialEffect != 0) propMask |= 1u << 9;
+        if (!string.IsNullOrEmpty(MsFormsFactoryBinary.GetString(request.Properties, "accelerator"))) propMask |= 1u << 11;
+
         metadata["caption"] = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
         metadata["sizeSource"] = "labelExtraDataBlock";
         metadata["parser"] = "msOFormsLabel";
-        metadata["propMask"] = "0x00000028";
+        metadata["propMask"] = $"0x{propMask:X8}";
+        metadata["variousPropertyBitsRaw"] = unchecked((int)variousBits);
+        metadata["enabled"] = (variousBits & (1u << 1)) != 0;
+        metadata["backStyle"] = (variousBits & (1u << 3)) != 0 ? 1 : 0;
+        metadata["wordWrap"] = (variousBits & (1u << 23)) != 0;
+        metadata["autoSize"] = (variousBits & (1u << 28)) != 0;
+        metadata["foreColor"] = $"&H{foreColor:X8}&";
+        metadata["backColor"] = $"&H{backColor:X8}&";
+        metadata["borderColor"] = $"&H{borderColor:X8}&";
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle") is int borderStyleValue) metadata["borderStyle"] = borderStyleValue;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") is int specialEffectValue) metadata["specialEffect"] = specialEffectValue;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "picturePosition") is int picturePositionValue) metadata["picturePosition"] = picturePositionValue;
+        if (MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") is int mousePointerValue) metadata["mousePointer"] = mousePointerValue;
+        if (MsFormsFactoryBinary.GetString(request.Properties, "accelerator") is { Length: > 0 } accelerator) metadata["accelerator"] = accelerator[0].ToString();
         metadata["objectStreamSize"] = objectPayloadSize;
         metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
         metadata["tabStop"] = false;
@@ -83,32 +254,109 @@ internal sealed class LabelControlSchema : IGeneratedControlSchema
         metadata["siteAutoSize"] = true;
         return metadata;
     }
+
+    private static uint BuildVariousPropertyBits(Dictionary<string, object?> properties)
+    {
+        var bits = DefaultVariousPropertyBits;
+        SetBit(ref bits, 1, MsFormsFactoryBinary.GetBool(properties, "enabled"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "backStyle") is int backStyle)
+        {
+            SetBit(ref bits, 3, backStyle != 0);
+        }
+        SetBit(ref bits, 23, MsFormsFactoryBinary.GetBool(properties, "wordWrap"));
+        SetBit(ref bits, 28, MsFormsFactoryBinary.GetBool(properties, "autoSize"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "imeMode") is int imeMode)
+        {
+            bits &= ~(0xFu << 15);
+            bits |= ((uint)imeMode & 0xFu) << 15;
+        }
+
+        return bits;
+    }
+
+    private static void SetBit(ref uint bits, int bit, bool? value)
+    {
+        if (value is null) return;
+        var mask = 1u << bit;
+        bits = value.Value ? bits | mask : bits & ~mask;
+    }
 }
 
 internal sealed class TextBoxControlSchema : IGeneratedControlSchema
 {
+    private const uint DefaultBackColor = 0x8000_0005;
+    private const uint DefaultForeColor = 0x8000_0008;
+    private const uint DefaultBorderColor = 0x8000_0006;
+    private const uint DefaultVariousPropertyBits = 0x2C80_481B;
+    private const int DefaultBorderStyle = 1;
+    private const int DefaultSpecialEffect = 2;
+    private const int DefaultTextAlign = 1;
+
     public string Type => "TextBox";
     public uint SiteFlags => 0x0000_0013; // tabStop + visible + streamed.
 
     public byte[] BuildObjectPayload(GeneratedControlRequest request)
     {
         var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value");
+        var valueBytes = string.IsNullOrEmpty(value) ? [] : Encoding.Latin1.GetBytes(value);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var borderColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "borderColor"), DefaultBorderColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var maxLength = MsFormsFactoryBinary.GetInt32(request.Properties, "maxLength") ?? 0;
+        var borderStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle") ?? DefaultBorderStyle;
+        var scrollBars = MsFormsFactoryBinary.GetInt32(request.Properties, "scrollBars") ?? 0;
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
+        var passwordChar = MsFormsFactoryBinary.GetString(request.Properties, "passwordChar");
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
+        var textAlign = MsFormsFactoryBinary.GetInt32(request.Properties, "textAlignRaw") ??
+            ParseTextAlign(request.Properties) ??
+            DefaultTextAlign;
+
+        ulong propMask = 0x0000_0000_8000_0101ul; // VariousPropertyBits + Size + reserved bit.
+        if (backColor != DefaultBackColor) propMask |= 1ul << 1;
+        if (foreColor != DefaultForeColor) propMask |= 1ul << 2;
+        if (maxLength != 0) propMask |= 1ul << 3;
+        if (borderStyle != DefaultBorderStyle) propMask |= 1ul << 4;
+        if (scrollBars != 0) propMask |= 1ul << 5;
+        if (mousePointer != 0) propMask |= 1ul << 7;
+        if (!string.IsNullOrEmpty(passwordChar)) propMask |= 1ul << 9;
+        if (valueBytes.Length > 0) propMask |= 1ul << 22;
+        if (borderColor != DefaultBorderColor) propMask |= 1ul << 25;
+        if (specialEffect != DefaultSpecialEffect) propMask |= 1ul << 26;
+        if (textAlign != DefaultTextAlign) propMask |= 1ul << 33;
+
         using var dataBlock = new MemoryStream();
-        MsFormsFactoryBinary.WriteUInt32(dataBlock, 0x2C80_481B); // default editable TextBox various bits observed in VBA/Corel fixtures.
+        MsFormsFactoryBinary.WriteUInt32(dataBlock, variousBits);
+        if ((propMask & (1ul << 1)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, backColor);
+        if ((propMask & (1ul << 2)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, foreColor);
+        if ((propMask & (1ul << 3)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)maxLength));
+        if ((propMask & (1ul << 4)) != 0) dataBlock.WriteByte(checked((byte)borderStyle));
+        if ((propMask & (1ul << 5)) != 0) dataBlock.WriteByte(checked((byte)scrollBars));
+        if ((propMask & (1ul << 7)) != 0) dataBlock.WriteByte(checked((byte)mousePointer));
+        if ((propMask & (1ul << 9)) != 0)
+        {
+            MsFormsFactoryBinary.WritePadding(dataBlock, 2);
+            MsFormsFactoryBinary.WriteUInt16(dataBlock, passwordChar![0]);
+        }
+        if ((propMask & (1ul << 22)) != 0)
+        {
+            MsFormsFactoryBinary.WritePadding(dataBlock, 4);
+            MsFormsFactoryBinary.WriteCount(dataBlock, valueBytes.Length);
+        }
+        if ((propMask & (1ul << 25)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, borderColor);
+        if ((propMask & (1ul << 26)) != 0) MsFormsFactoryBinary.WriteUInt32(dataBlock, unchecked((uint)specialEffect));
+        if ((propMask & (1ul << 33)) != 0) dataBlock.WriteByte(checked((byte)textAlign));
+        MsFormsFactoryBinary.WritePadding(dataBlock, 4);
 
         using var extra = new MemoryStream();
         MsFormsFactoryBinary.WriteSize(extra, request.Width, request.Height);
-        if (!string.IsNullOrEmpty(value))
+        if (valueBytes.Length > 0)
         {
-            var valueBytes = Encoding.Latin1.GetBytes(value);
-            MsFormsFactoryBinary.WriteCount(dataBlock, valueBytes.Length);
             extra.Write(valueBytes);
             MsFormsFactoryBinary.WritePadding(extra, 4);
         }
 
-        var propMask = string.IsNullOrEmpty(value)
-            ? 0x0000_0000_8000_0101ul
-            : 0x0000_0000_8040_0101ul;
         var control = MsFormsFactoryBinary.BuildVersionedMorphControl(propMask, dataBlock.ToArray(), extra.ToArray());
         var textProps = TextPropsFactory.Build(request.Properties, TextPropsFactory.StandardMask);
         return [.. control, .. textProps];
@@ -117,14 +365,64 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
         var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value");
+        var valueBytes = string.IsNullOrEmpty(value) ? [] : Encoding.Latin1.GetBytes(value);
+        var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
+        var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
+        var borderColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "borderColor"), DefaultBorderColor);
+        var variousBits = BuildVariousPropertyBits(request.Properties);
+        var maxLength = MsFormsFactoryBinary.GetInt32(request.Properties, "maxLength") ?? 0;
+        var borderStyle = MsFormsFactoryBinary.GetInt32(request.Properties, "borderStyle") ?? DefaultBorderStyle;
+        var scrollBars = MsFormsFactoryBinary.GetInt32(request.Properties, "scrollBars") ?? 0;
+        var mousePointer = MsFormsFactoryBinary.GetInt32(request.Properties, "mousePointer") ?? 0;
+        var passwordChar = MsFormsFactoryBinary.GetString(request.Properties, "passwordChar");
+        var specialEffect = MsFormsFactoryBinary.GetInt32(request.Properties, "specialEffect") ?? DefaultSpecialEffect;
+        var textAlign = MsFormsFactoryBinary.GetInt32(request.Properties, "textAlignRaw") ??
+            ParseTextAlign(request.Properties) ??
+            DefaultTextAlign;
+        ulong propMask = 0x0000_0000_8000_0101ul;
+        if (backColor != DefaultBackColor) propMask |= 1ul << 1;
+        if (foreColor != DefaultForeColor) propMask |= 1ul << 2;
+        if (maxLength != 0) propMask |= 1ul << 3;
+        if (borderStyle != DefaultBorderStyle) propMask |= 1ul << 4;
+        if (scrollBars != 0) propMask |= 1ul << 5;
+        if (mousePointer != 0) propMask |= 1ul << 7;
+        if (!string.IsNullOrEmpty(passwordChar)) propMask |= 1ul << 9;
+        if (valueBytes.Length > 0) propMask |= 1ul << 22;
+        if (borderColor != DefaultBorderColor) propMask |= 1ul << 25;
+        if (specialEffect != DefaultSpecialEffect) propMask |= 1ul << 26;
+        if (textAlign != DefaultTextAlign) propMask |= 1ul << 33;
+
         var metadata = TextPropsFactory.BuildMetadata(TextPropsFactory.StandardMask, request.Properties);
         metadata["parser"] = "msOFormsMorphData";
         metadata["controlType"] = "TextBox";
         metadata["sizeSource"] = "morphDataExtraDataBlock";
-        metadata["propMask"] = string.IsNullOrEmpty(value)
-            ? "0x0000000080000101"
-            : "0x0000000080400101";
-        metadata["variousPropertyBitsRaw"] = 0x2C80_481B;
+        metadata["propMask"] = $"0x{propMask:X16}";
+        metadata["variousPropertyBitsRaw"] = unchecked((int)variousBits);
+        metadata["backColor"] = $"&H{backColor:X8}&";
+        metadata["foreColor"] = $"&H{foreColor:X8}&";
+        metadata["borderColor"] = $"&H{borderColor:X8}&";
+        metadata["enabled"] = (variousBits & (1u << 1)) != 0;
+        metadata["locked"] = (variousBits & (1u << 2)) != 0;
+        metadata["backStyle"] = (variousBits & (1u << 3)) != 0 ? 1 : 0;
+        metadata["integralHeight"] = (variousBits & (1u << 11)) != 0;
+        metadata["dragBehavior"] = (variousBits & (1u << 19)) != 0 ? 1 : 0;
+        metadata["enterKeyBehavior"] = (variousBits & (1u << 20)) != 0;
+        metadata["enterFieldBehavior"] = (variousBits & (1u << 21)) != 0 ? 1 : 0;
+        metadata["tabKeyBehavior"] = (variousBits & (1u << 22)) != 0;
+        metadata["wordWrap"] = (variousBits & (1u << 23)) != 0;
+        metadata["selectionMargin"] = (variousBits & (1u << 26)) != 0;
+        metadata["autoWordSelect"] = (variousBits & (1u << 27)) != 0;
+        metadata["autoSize"] = (variousBits & (1u << 28)) != 0;
+        metadata["hideSelection"] = (variousBits & (1u << 29)) != 0;
+        metadata["autoTab"] = (variousBits & (1u << 30)) != 0;
+        metadata["multiLine"] = (variousBits & (1u << 31)) != 0;
+        metadata["borderStyle"] = borderStyle;
+        metadata["scrollBars"] = scrollBars;
+        metadata["maxLength"] = maxLength;
+        metadata["specialEffect"] = specialEffect;
+        metadata["textAlign"] = TextPropsFactory.TextAlignName(textAlign);
+        if (mousePointer != 0) metadata["mousePointer"] = mousePointer;
+        if (!string.IsNullOrEmpty(passwordChar)) metadata["passwordChar"] = passwordChar[0].ToString();
         metadata["objectStreamSize"] = objectPayloadSize;
         metadata["siteBitFlags"] = $"0x{SiteFlags:X8}";
         metadata["tabStop"] = true;
@@ -136,6 +434,46 @@ internal sealed class TextBoxControlSchema : IGeneratedControlSchema
         }
 
         return metadata;
+    }
+
+    private static uint BuildVariousPropertyBits(Dictionary<string, object?> properties)
+    {
+        var bits = DefaultVariousPropertyBits;
+        SetBit(ref bits, 1, MsFormsFactoryBinary.GetBool(properties, "enabled"));
+        SetBit(ref bits, 2, MsFormsFactoryBinary.GetBool(properties, "locked"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "backStyle") is int backStyle) SetBit(ref bits, 3, backStyle != 0);
+        SetBit(ref bits, 11, MsFormsFactoryBinary.GetBool(properties, "integralHeight"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "dragBehavior") is int dragBehavior) SetBit(ref bits, 19, dragBehavior != 0);
+        SetBit(ref bits, 20, MsFormsFactoryBinary.GetBool(properties, "enterKeyBehavior"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "enterFieldBehavior") is int enterFieldBehavior) SetBit(ref bits, 21, enterFieldBehavior != 0);
+        SetBit(ref bits, 22, MsFormsFactoryBinary.GetBool(properties, "tabKeyBehavior"));
+        SetBit(ref bits, 23, MsFormsFactoryBinary.GetBool(properties, "wordWrap"));
+        SetBit(ref bits, 26, MsFormsFactoryBinary.GetBool(properties, "selectionMargin"));
+        SetBit(ref bits, 27, MsFormsFactoryBinary.GetBool(properties, "autoWordSelect"));
+        SetBit(ref bits, 28, MsFormsFactoryBinary.GetBool(properties, "autoSize"));
+        SetBit(ref bits, 29, MsFormsFactoryBinary.GetBool(properties, "hideSelection"));
+        SetBit(ref bits, 30, MsFormsFactoryBinary.GetBool(properties, "autoTab"));
+        SetBit(ref bits, 31, MsFormsFactoryBinary.GetBool(properties, "multiLine"));
+        if (MsFormsFactoryBinary.GetInt32(properties, "imeMode") is int imeMode)
+        {
+            bits &= ~(0xFu << 15);
+            bits |= ((uint)imeMode & 0xFu) << 15;
+        }
+
+        return bits;
+    }
+
+    private static int? ParseTextAlign(Dictionary<string, object?> properties) =>
+        MsFormsFactoryBinary.GetString(properties, "textAlign") is { } textAlign &&
+        TextPropsFactory.TryParseTextAlign(textAlign, out var parsed)
+            ? parsed
+            : null;
+
+    private static void SetBit(ref uint bits, int bit, bool? value)
+    {
+        if (value is null) return;
+        var mask = 1u << bit;
+        bits = value.Value ? bits | mask : bits & ~mask;
     }
 }
 

@@ -20,6 +20,8 @@ internal sealed record HumanLayoutDocument(
         "tag",
         "controlTipText",
         "accelerator",
+        "textAlign",
+        "paragraphAlign",
         "backColor",
         "foreColor",
         "borderColor",
@@ -35,8 +37,25 @@ internal sealed record HumanLayoutDocument(
         "locked",
         "tabIndex",
         "tabStop",
+        "default",
+        "cancel",
         "wordWrap",
         "autoSize",
+        "autoTab",
+        "autoWordSelect",
+        "hideSelection",
+        "integralHeight",
+        "multiLine",
+        "selectionMargin",
+        "enterKeyBehavior",
+        "tabKeyBehavior",
+        "enterFieldBehavior",
+        "dragBehavior",
+        "imeMode",
+        "takeFocusOnClick",
+        "maxLength",
+        "passwordChar",
+        "scrollBars",
         "specialEffect",
         "borderStyle",
         "displayStyle",
@@ -129,6 +148,38 @@ internal sealed record HumanLayoutDocument(
             AddDefault(values, sources, "fontName", "Tahoma");
             AddDefault(values, sources, "fontSize", 8);
         }
+
+        if (controlType.Equals("TextBox", StringComparison.OrdinalIgnoreCase))
+        {
+            AddDefault(values, sources, "enabled", true);
+            AddDefault(values, sources, "visible", true);
+            AddDefault(values, sources, "locked", false);
+            AddDefault(values, sources, "tabStop", true);
+            AddDefault(values, sources, "backColor", "&H80000005&");
+            AddDefault(values, sources, "foreColor", "&H80000008&");
+            AddDefault(values, sources, "borderColor", "&H80000006&");
+            AddDefault(values, sources, "backStyle", 1);
+            AddDefault(values, sources, "wordWrap", true);
+            AddDefault(values, sources, "autoSize", false);
+            AddDefault(values, sources, "autoTab", false);
+            AddDefault(values, sources, "autoWordSelect", true);
+            AddDefault(values, sources, "dragBehavior", 0);
+            AddDefault(values, sources, "enterFieldBehavior", 0);
+            AddDefault(values, sources, "enterKeyBehavior", false);
+            AddDefault(values, sources, "hideSelection", true);
+            AddDefault(values, sources, "integralHeight", true);
+            AddDefault(values, sources, "multiLine", false);
+            AddDefault(values, sources, "selectionMargin", true);
+            AddDefault(values, sources, "tabKeyBehavior", false);
+            AddDefault(values, sources, "imeMode", 0);
+            AddDefault(values, sources, "maxLength", 0);
+            AddDefault(values, sources, "scrollBars", 0);
+            AddDefault(values, sources, "borderStyle", 1);
+            AddDefault(values, sources, "specialEffect", 2);
+            AddDefault(values, sources, "textAlign", "left");
+            AddDefault(values, sources, "fontName", "Tahoma");
+            AddDefault(values, sources, "fontSize", 8);
+        }
     }
 
     private static void AddDefault(
@@ -153,6 +204,11 @@ internal sealed record HumanLayoutDocument(
             return false;
         }
 
+        if (IsRebuiltTextBoxProperty(name, properties))
+        {
+            return true;
+        }
+
         return name.ToLowerInvariant() switch
         {
             "caption" or "tag" or "controltiptext" or "fontname" or "value" or "groupname" =>
@@ -163,6 +219,23 @@ internal sealed record HumanLayoutDocument(
                 properties.ContainsKey("tabIndexOffset") || properties.ContainsKey("recordMarkerOffset"),
             _ => false
         };
+    }
+
+    private static bool IsRebuiltTextBoxProperty(string name, Dictionary<string, object?> properties)
+    {
+        if (!properties.TryGetValue("controlType", out var controlType) ||
+            !string.Equals(controlType?.ToString(), "TextBox", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return name.ToLowerInvariant() is
+            "value" or "fontname" or "fontsize" or "backcolor" or "forecolor" or "bordercolor" or
+            "enabled" or "locked" or "backstyle" or "autosize" or "autotab" or "autowordselect" or
+            "dragbehavior" or "enterfieldbehavior" or "enterkeybehavior" or "hideselection" or
+            "integralheight" or "multiline" or "selectionmargin" or "tabkeybehavior" or "wordwrap" or
+            "imemode" or "maxlength" or "passwordchar" or "scrollbars" or "borderstyle" or
+            "specialeffect" or "mousepointer" or "textalign";
     }
 }
 
