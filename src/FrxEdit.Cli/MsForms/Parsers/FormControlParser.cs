@@ -172,6 +172,22 @@ internal static class FormControlParser
             return false;
         }
 
+        cursor = blockEnd;
+        if (Has(propMask, 20)) // fFont
+        {
+            ObjectStreamParser.TrySkipGuidAndFont(data, ref cursor);
+        }
+
+        if (Has(propMask, 21)) // fPicture
+        {
+            ObjectStreamParser.TryReadGuidAndPicture(data, fileOffsets, ref cursor, "formPicture", result);
+        }
+
+        if (Has(propMask, 15)) // fMouseIcon
+        {
+            ObjectStreamParser.TryReadGuidAndPicture(data, fileOffsets, ref cursor, "formMouseIcon", result);
+        }
+
         properties = new FormControlProperties(
             result,
             displayedWidth,

@@ -68,7 +68,14 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         {
             var isTemplate = parsed.GetOption("as-template") is not null;
             var patchDocument = FrxEdit.Cli.MsForms.Model.PatchDocumentGenerator.FromRaw(layout, project.FormName, asTemplate: isTemplate);
-            WriteJson(parsed.GetOption("out"), patchDocument);
+            
+            var outPath = parsed.GetOption("out");
+            if (parsed.GetOption("extract-images") is not null && outPath is not null)
+            {
+                ExtractImages(patchDocument, outPath);
+            }
+            
+            WriteJson(outPath, patchDocument);
         }
         else
         {
@@ -422,6 +429,46 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine($"Wrote {Path.GetFullPath(outPath)}");
     }
 
+    private void ExtractImages(PatchDocument patch, string outPath)
+    {
+        var outDir = Path.GetDirectoryName(Path.GetFullPath(outPath)) ?? "";
+        
+        void ProcessProperties(Dictionary<string, JsonElement>? props, string prefix)
+        {
+            if (props is null) return;
+            foreach (var key in props.Keys.ToList())
+            {
+                if (props[key].ValueKind == JsonValueKind.String)
+                {
+                    var s = props[key].GetString();
+                    if (s != null && s.StartsWith("base64:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var base64 = s["base64:".Length..];
+                        var fileName = $"{prefix}_{key}.bin";
+                        var fullPath = Path.Combine(outDir, fileName);
+                        File.WriteAllBytes(fullPath, Convert.FromBase64String(base64));
+                        props[key] = JsonSerializer.SerializeToElement($"file://{fileName}");
+                    }
+                }
+            }
+        }
+
+        if (patch.Properties is not null)
+        {
+            foreach (var pair in patch.Properties)
+            {
+                ProcessProperties(pair.Value, pair.Key);
+            }
+        }
+        if (patch.Add is not null)
+        {
+            foreach (var control in patch.Add)
+            {
+                ProcessProperties(control.Properties, control.Name ?? "unnamed");
+            }
+        }
+    }
+
     private int Fail(string message)
     {
         stderr.WriteLine($"error: {message}");
@@ -433,9 +480,10 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
     {
         stdout.WriteLine("frxedit inspect <UserForm.frm> [--mode tolerant|strict|legacy] [--out layout.json]");
         stdout.WriteLine("frxedit inspect <UserForm.frm> --as-patch --out layout.patch.json");
-        stdout.WriteLine("frxedit inspect <UserForm.frm> --as-template --out layout.template.json");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> --as-template --out layout.template.json [--extract-images]");
         stdout.WriteLine("  --as-patch exports properties only for in-place modifications.");
         stdout.WriteLine("  --as-template exports both properties and structural layout to clone the form from scratch.");
+        stdout.WriteLine("  --extract-images extracts base64 picture/mouseIcon to separate binary files and uses file:// references.");
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");

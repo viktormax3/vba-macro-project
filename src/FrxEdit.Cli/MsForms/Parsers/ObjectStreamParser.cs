@@ -351,7 +351,7 @@ internal static class ObjectStreamParser
         return new ObjectStreamProperties(properties, width, height, widthOffset, heightOffset);
     }
 
-    private static bool TryReadGuidAndPicture(
+    internal static bool TryReadGuidAndPicture(
         byte[] data,
         int[] fileOffsets,
         ref int cursor,
@@ -402,17 +402,41 @@ internal static class ObjectStreamParser
         cursor += (int)pictureSize;
         properties[$"{propertyPrefix}StreamEndLocalOffset"] = cursor;
         properties[$"{propertyPrefix}StreamEndOffset"] = MsFormsBinary.EndOffsetAt(fileOffsets, cursor);
+
+        // Store the complete GuidAndPicture stream as a Base64 string so it can be exported to JSON patch.
+        var pictureBytes = data.AsSpan(start, cursor - start).ToArray();
+        properties[propertyPrefix] = $"base64:{Convert.ToBase64String(pictureBytes)}";
+
         return true;
     }
 
-    private static string ReadGuidString(byte[] data, int offset)
+    internal static bool TrySkipGuidAndFont(byte[] data, ref int cursor)
+    {
+        if (cursor + 16 > data.Length) return false;
+
+        var guid = ReadGuidString(data, cursor);
+        cursor += 16;
+
+        if (guid == "{0BE35203-8F91-11CE-9DE3-00AA004BB851}") // StdFont
+        {
+            if (cursor + 11 > data.Length) return false;
+            var faceLen = data[cursor + 10];
+            cursor += 11 + faceLen;
+            return true;
+        }
+        
+        // If it's TextProps, we don't have an easy skip method here, but UserForm usually uses StdFont.
+        return false;
+    }
+
+    internal static string ReadGuidString(byte[] data, int offset)
     {
         var bytes = new byte[16];
         Array.Copy(data, offset, bytes, 0, 16);
         return new Guid(bytes).ToString("B").ToUpperInvariant();
     }
 
-    private static string DetectPictureFormat(ReadOnlySpan<byte> bytes)
+    internal static string DetectPictureFormat(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) return "JPEG";
         if (bytes.Length >= 6 && bytes[0] == (byte)'G' && bytes[1] == (byte)'I' && bytes[2] == (byte)'F') return "GIF";

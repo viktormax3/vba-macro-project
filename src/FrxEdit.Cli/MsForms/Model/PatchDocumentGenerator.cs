@@ -18,9 +18,11 @@ internal static class PatchDocumentGenerator
         "enterFieldBehavior", "dragBehavior", "imeMode", "takeFocusOnClick", "maxLength",
         "passwordChar", "scrollBars", "specialEffect", "borderStyle", "displayStyle", "listWidth",
         "boundColumn", "textColumn", "columnCount", "listRows", "matchEntry", "listStyle",
-        "showDropButtonWhen", "dropButtonStyle", "multiSelect", "columnHeads", "matchRequired",
-        "editable", "mousePointer", "picturePosition", "min", "max", "position", "smallChange",
-        "largeChange", "orientation", "logicalWidth", "logicalHeight", "scrollLeft", "scrollTop",
+        "showDropButtonWhen", "dropButtonStyle", "multiSelect", "columnHeads", "matchRequired", 
+        "editable", "mousePointer", "picturePosition", "picture", "mouseIcon",
+        "pictureSizeMode", "pictureAlignment", "pictureTiling",
+        "min", "max", "position", "smallChange", "largeChange", "orientation",
+        "logicalWidth", "logicalHeight", "scrollLeft", "scrollTop",
         "logicalWidthPt", "logicalHeightPt", "scrollLeftPt", "scrollTopPt"
     ];
 
@@ -28,11 +30,11 @@ internal static class PatchDocumentGenerator
     {
         "formBackColor", "formForeColor", "formBorderColor", "formCaption", "formBorderStyle",
         "formMousePointer", "formScrollBars", "formCycle", "formSpecialEffect", "formPictureAlignment",
-        "formPictureSizeMode", "formZoom", "nextAvailableId", "displayedWidth", "displayedHeight",
+        "formPictureSizeMode", "formZoom", "formPicture", "formMouseIcon", "nextAvailableId", "displayedWidth", "displayedHeight",
         "displayedWidthPt", "displayedHeightPt", "logicalWidth", "logicalHeight", "logicalWidthPt",
         "logicalHeightPt", "scrollLeft", "scrollTop", "scrollLeftPt", "scrollTopPt", "formBooleanProperties",
         "StartUpPosition", "ShowModal", "Tag", "Left", "Top", "Width", "Height", "ClientLeft", "ClientTop", "ClientWidth", "ClientHeight",
-        "DrawBuffer", "WhatsThisButton", "WhatsThisHelp"
+        "DrawBuffer", "WhatsThisButton", "WhatsThisHelp", "picture", "mouseIcon"
     };
 
     private static string CanonicalizeRootFormPropertyName(string name)
@@ -337,6 +339,7 @@ internal static class PatchDocumentGenerator
                 "caption" or "value" or "groupname" or "fontname" or "fontsize" or "backcolor" or
                 "forecolor" or "enabled" or "locked" or "backstyle" or "alignment" or "wordwrap" or
                 "autosize" or "imemode" or "specialeffect" or "mousepointer" or "pictureposition" or
+                "picture" or "mouseicon" or
                 "accelerator" or "textalign" or "tabindex" or "tabstop" or "visible" or
                 "leftpt" or "toppt" or "widthpt" or "heightpt";
         }
@@ -346,6 +349,7 @@ internal static class PatchDocumentGenerator
             return name.ToLowerInvariant() is
                 "caption" or "fontname" or "fontsize" or "backcolor" or "forecolor" or
                 "enabled" or "locked" or "wordwrap" or "autosize" or "mousepointer" or "pictureposition" or
+                "picture" or "mouseicon" or "picturesizemode" or "picturealignment" or "picturetiling" or
                 "accelerator" or "takefocusonclick" or "textalign" or "paragraphalign" or "tabindex" or "tabstop" or "visible" or "default" or "cancel" or
                 "leftpt" or "toppt" or "widthpt" or "heightpt";
         }
