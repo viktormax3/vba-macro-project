@@ -1,0 +1,42 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - runtime: win-x64
+            os: windows
+          - runtime: linux-x64
+            os: linux
+          - runtime: osx-x64
+            os: osx
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+        
+    - name: Restore dependencies
+      run: dotnet restore src/FrxEdit.Cli/FrxEdit.Cli.csproj
+      
+    - name: Build and Publish
+      run: dotnet publish src/FrxEdit.Cli/FrxEdit.Cli.csproj -c Release -r ${{ matrix.runtime }} --self-contained true -p:PublishSingleFile=true -o ./publish/${{ matrix.runtime }}
+      
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: frxedit-${{ matrix.os }}
+        path: ./publish/${{ matrix.runtime }}/*

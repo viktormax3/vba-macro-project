@@ -35,3 +35,5 @@ scratch_tabstrip.cs
 out/
 scratch/
 test_env/
+# Local Test Environments
+test_env/

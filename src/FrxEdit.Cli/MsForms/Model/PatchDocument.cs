@@ -20,6 +20,8 @@ internal sealed class PatchDocument
         {
             var controlName = pair.Key;
             var props = pair.Value;
+            if (props is null) continue;
+
             var isForm = string.Equals(controlName, "UserForm", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(controlName, "Form", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(controlName, "root", StringComparison.OrdinalIgnoreCase) ||
