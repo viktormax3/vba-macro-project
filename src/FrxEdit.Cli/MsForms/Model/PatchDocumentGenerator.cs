@@ -364,7 +364,9 @@ internal static class PatchDocumentGenerator
             "textcolumn" or "columncount" or "listrows" or "matchentry" or "liststyle" or
             "showdropbuttonwhen" or "dropbuttonstyle" or "multiselect" or "columnheads" or
             "matchrequired" or "editable" or "displaystyle" or "caption" or "groupname" or
-            "pictureposition" or "accelerator" or "alignment" or "tabindex" or "tabstop" or "visible" or
+            "pictureposition" or "picture" or "mouseicon" or "picturesizemode" or "picturealignment" or "picturetiling" or
+            "accelerator" or "alignment" or "tabindex" or "tabstop" or "visible" or
+            "min" or "max" or "position" or "smallchange" or "largechange" or "orientation" or "delay" or "proportionalthumb" or
             "scrollleft" or "scrolltop" or "logicalwidth" or "logicalheight" or
             "scrollleftpt" or "scrolltoppt" or "logicalwidthpt" or "logicalheightpt" or
             "leftpt" or "toppt" or "widthpt" or "heightpt";
