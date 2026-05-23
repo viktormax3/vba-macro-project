@@ -27,6 +27,8 @@ classDiagram
         +number scrollLeft
         +number scrollTop
         +boolean rightToLeft
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class CommandButton {
@@ -43,6 +45,8 @@ classDiagram
         +string fontName
         +number fontSize
         +number picturePosition (0-12)
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class TextBox {
@@ -67,6 +71,8 @@ classDiagram
         +number specialEffect (0-6)
         +number borderStyle (0-1)
         +string borderColor
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class Label {
@@ -81,6 +87,8 @@ classDiagram
         +number specialEffect (0-6)
         +number borderStyle (0-1)
         +string borderColor
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class CheckBox {
@@ -97,6 +105,8 @@ classDiagram
         +number textAlign (1-3)
         +number specialEffect (0-6)
         +number alignment (0-1)
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class OptionButton {
@@ -114,6 +124,8 @@ classDiagram
         +number specialEffect (0-6)
         +number alignment (0-1)
         +string groupName
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class ToggleButton {
@@ -129,6 +141,8 @@ classDiagram
         +string accelerator
         +number textAlign (1-3)
         +number picturePosition (0-12)
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 ```
 
@@ -150,6 +164,8 @@ classDiagram
         +number specialEffect (0-6)
         +number borderStyle (0-1)
         +string borderColor
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class MultiPage {
@@ -160,6 +176,8 @@ classDiagram
         +number tabOrientation (0-3)
         +boolean multiRow
         +number value (Active Page Index)
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
     
     class Page {
@@ -178,6 +196,8 @@ classDiagram
         +number tabOrientation (0-3)
         +boolean multiRow
         +number value
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class ComboBox {
@@ -200,6 +220,8 @@ classDiagram
         +number specialEffect (0-6)
         +number borderStyle (0-1)
         +string borderColor
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class ListBox {
@@ -214,6 +236,8 @@ classDiagram
         +number specialEffect (0-6)
         +number borderStyle (0-1)
         +string borderColor
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class ScrollBar {
@@ -227,6 +251,8 @@ classDiagram
         +boolean enabled
         +boolean proportionalThumb
         +number orientation (0-1)
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class SpinButton {
@@ -238,6 +264,8 @@ classDiagram
         +string foreColor
         +boolean enabled
         +number orientation (0-1)
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     class Image {
@@ -251,6 +279,8 @@ classDiagram
         +number specialEffect (0-6)
         +number borderStyle (0-1)
         +string borderColor
+        +number mousePointer (0-15, 99)
+        +string mouseIcon (Base64/File)
     }
 
     MultiPage *-- Page : contains
@@ -337,3 +367,20 @@ For properties requiring an integer enum, FrxEdit uses the standard MS-Forms VBA
 * `-1`: fmOrientationAuto
 * `0`: fmOrientationVertical
 * `1`: fmOrientationHorizontal
+
+### fmMousePointer (`mousePointer`)
+* `0`: fmMousePointerDefault
+* `1`: fmMousePointerArrow
+* `2`: fmMousePointerCross
+* `3`: fmMousePointerIBeam
+* `6`: fmMousePointerNESW
+* `7`: fmMousePointerNS
+* `8`: fmMousePointerNWSE
+* `9`: fmMousePointerWE
+* `10`: fmMousePointerUpArrow
+* `11`: fmMousePointerHourGlass
+* `12`: fmMousePointerNoDrop
+* `13`: fmMousePointerAppStarting
+* `14`: fmMousePointerHelp
+* `15`: fmMousePointerSizeAll
+* `99`: fmMousePointerCustom
