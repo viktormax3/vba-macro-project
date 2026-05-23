@@ -384,3 +384,39 @@ For properties requiring an integer enum, FrxEdit uses the standard MS-Forms VBA
 * `14`: fmMousePointerHelp
 * `15`: fmMousePointerSizeAll
 * `99`: fmMousePointerCustom
+
+## Color Properties
+
+Properties like `backColor`, `foreColor`, and `borderColor` accept three different formats:
+
+1. **Web Hex Format**: The standard web format `"#RRGGBB"` (e.g., `"#FF0000"` for pure red). FrxEdit automatically translates this to the internal MS-Forms `0x00BBGGRR` format.
+2. **Legacy VBA Format**: The exact VBA hex format `"&H00BBGGRR&"`.
+3. **System Colors**: A literal string representing a native OS system color.
+
+### Supported System Colors
+The following literal strings can be used to assign dynamic OS UI colors:
+* `"systemScrollbar"`
+* `"systemBackground"`
+* `"systemActiveCaption"`
+* `"systemInactiveCaption"`
+* `"systemMenu"`
+* `"systemWindow"`
+* `"systemWindowFrame"`
+* `"systemMenuText"`
+* `"systemWindowText"`
+* `"systemCaptionText"`
+* `"systemActiveBorder"`
+* `"systemInactiveBorder"`
+* `"systemAppWorkspace"`
+* `"systemHighlight"`
+* `"systemHighlightText"`
+* `"systemButtonFace"`
+* `"systemButtonShadow"`
+* `"systemGrayText"`
+* `"systemButtonText"`
+* `"systemInactiveCaptionText"`
+* `"systemButtonHighlight"`
+* `"system3DDarkShadow"`
+* `"system3DLight"`
+* `"systemInfoText"`
+* `"systemInfoBackground"`
