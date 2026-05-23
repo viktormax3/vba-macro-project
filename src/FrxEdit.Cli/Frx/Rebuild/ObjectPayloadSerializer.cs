@@ -97,12 +97,33 @@ internal static class ObjectPayloadSerializer
         }
 
         if ((control.Type.Equals("CheckBox", StringComparison.OrdinalIgnoreCase) ||
+             control.Type.Equals("ToggleButton", StringComparison.OrdinalIgnoreCase) ||
              control.Type.Equals("OptionButton", StringComparison.OrdinalIgnoreCase)) &&
             control.Properties is not null &&
             TryGetString(control.Properties, "parser", out var morphButtonParser) &&
             morphButtonParser.Equals("msOFormsMorphData", StringComparison.OrdinalIgnoreCase))
         {
             return SerializeMorphButtonRebuilt(control);
+        }
+
+        if (control.Type.Equals("Image", StringComparison.OrdinalIgnoreCase) && control.Properties is not null)
+        {
+            return SerializeImageRebuilt(control, original);
+        }
+
+        if (control.Type.Equals("ScrollBar", StringComparison.OrdinalIgnoreCase) && control.Properties is not null)
+        {
+            return SerializeScrollBarRebuilt(control, original);
+        }
+
+        if (control.Type.Equals("SpinButton", StringComparison.OrdinalIgnoreCase) && control.Properties is not null)
+        {
+            return SerializeSpinButtonRebuilt(control, original);
+        }
+
+        if (control.Type.Equals("TabStrip", StringComparison.OrdinalIgnoreCase) && control.Properties is not null)
+        {
+            return SerializeTabStripRebuilt(control);
         }
 
         return SerializeVariableStrings(control, original, allowGrowth: true);
@@ -605,6 +626,288 @@ internal static class ObjectPayloadSerializer
             Caption: TryGetString(props, "caption", out var caption) ? caption : control.Name,
             Value: TryGetString(props, "value", out var value) ? value : "0",
             Properties: props);
+        return schema.BuildObjectPayload(request);
+    }
+
+    private static byte[] SerializeImageRebuilt(ControlInfo control, ReadOnlySpan<byte> original)
+    {
+        var props = control.Properties!;
+
+        const uint defaultBorderColor = 0x8000_0006;
+        const uint defaultBackColor = 0x8000_000F;
+        const uint defaultVarious = 0x0000_0000;
+
+        var borderColor = TryGetString(props, "borderColor", out var borderColorText) && TryParseVbaColor(borderColorText, out var parsedBorder)
+            ? parsedBorder
+            : defaultBorderColor;
+        var backColor = TryGetString(props, "backColor", out var backColorText) && TryParseVbaColor(backColorText, out var parsedBack)
+            ? parsedBack
+            : defaultBackColor;
+        var various = TryGetInt(props, "variousPropertyBitsRaw", out var variousRaw)
+            ? unchecked((uint)variousRaw)
+            : defaultVarious;
+        var borderStyle = TryGetInt(props, "borderStyle", out var borderStyleRaw) ? borderStyleRaw : 1;
+        var mousePointer = TryGetInt(props, "mousePointer", out var mousePointerRaw) ? mousePointerRaw : 0;
+        var pictureSizeMode = TryGetInt(props, "pictureSizeMode", out var pictureSizeModeRaw) ? pictureSizeModeRaw : 0;
+        var specialEffect = TryGetInt(props, "specialEffect", out var specialEffectRaw) ? specialEffectRaw : 0;
+        var pictureAlignment = TryGetInt(props, "pictureAlignment", out var pictureAlignmentRaw) ? pictureAlignmentRaw : 2;
+
+        var autoSize = props.TryGetValue("autoSize", out var autoSizeObj) && autoSizeObj is bool bAutoSize && bAutoSize;
+        var pictureTiling = props.TryGetValue("pictureTiling", out var pictureTilingObj) && pictureTilingObj is bool bPictureTiling && bPictureTiling;
+
+        uint propMask = 0x0000_0200; // fSize
+        if (autoSize) propMask |= 1u << 2;
+        if (borderColor != defaultBorderColor) propMask |= 1u << 3;
+        if (backColor != defaultBackColor) propMask |= 1u << 4;
+        if (borderStyle != 1) propMask |= 1u << 5;
+        if (mousePointer != 0) propMask |= 1u << 6;
+        if (pictureSizeMode != 0) propMask |= 1u << 7;
+        if (specialEffect != 0) propMask |= 1u << 8;
+        if (TryGetString(props, "picture", out var _)) propMask |= 1u << 10;
+        if (pictureAlignment != 2) propMask |= 1u << 11;
+        if (pictureTiling) propMask |= 1u << 12;
+        if (various != defaultVarious) propMask |= 1u << 13;
+        if (TryGetString(props, "mouseIcon", out var _)) propMask |= 1u << 14;
+
+        using var dataBlock = new MemoryStream();
+        if ((propMask & (1u << 3)) != 0) WriteUInt32(dataBlock, borderColor);
+        if ((propMask & (1u << 4)) != 0) WriteUInt32(dataBlock, backColor);
+
+        if ((propMask & (1u << 5)) != 0) dataBlock.WriteByte(checked((byte)borderStyle));
+        if ((propMask & (1u << 6)) != 0) dataBlock.WriteByte(checked((byte)mousePointer));
+        if ((propMask & (1u << 7)) != 0) dataBlock.WriteByte(checked((byte)pictureSizeMode));
+        if ((propMask & (1u << 8)) != 0) dataBlock.WriteByte(checked((byte)specialEffect));
+
+        if ((propMask & (1u << 10)) != 0)
+        {
+            WritePadding(dataBlock, 2);
+            WriteUInt16(dataBlock, 0xFFFF);
+        }
+        if ((propMask & (1u << 11)) != 0)
+        {
+            dataBlock.WriteByte(checked((byte)pictureAlignment));
+        }
+        if ((propMask & (1u << 12)) != 0)
+        {
+            // Just the flag
+        }
+        if ((propMask & (1u << 13)) != 0)
+        {
+            WritePadding(dataBlock, 4);
+            WriteUInt32(dataBlock, various);
+        }
+        if ((propMask & (1u << 14)) != 0)
+        {
+            WritePadding(dataBlock, 2);
+            WriteUInt16(dataBlock, 0xFFFF);
+        }
+        WritePadding(dataBlock, 4);
+
+        using var extra = new MemoryStream();
+        if ((propMask & (1u << 9)) != 0)
+        {
+            WriteInt32(extra, control.RawWidth ?? 0);
+            WriteInt32(extra, control.RawHeight ?? 0);
+        }
+
+        var existingStreamData = Array.Empty<byte>();
+        if (TryGetInt(props, "imageStreamDataLocalOffset", out var streamDataOffset) &&
+            TryGetInt(props, "imageStreamDataEndLocalOffset", out var streamDataEnd) &&
+            streamDataEnd >= streamDataOffset &&
+            original.Length > 0)
+        {
+            existingStreamData = RebuildTrailingData(props, original.ToArray(), streamDataOffset, streamDataEnd);
+        }
+
+        var header = new byte[8];
+        header[0] = 0x00;
+        header[1] = 0x02;
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)(dataBlock.Length + extra.Length)));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), propMask);
+
+        var resultStream = new MemoryStream();
+        resultStream.Write(header);
+        dataBlock.Position = 0;
+        dataBlock.CopyTo(resultStream);
+        extra.Position = 0;
+        extra.CopyTo(resultStream);
+        resultStream.Write(existingStreamData);
+        return resultStream.ToArray();
+    }
+
+    private static byte[] SerializeScrollBarRebuilt(ControlInfo control, ReadOnlySpan<byte> original)
+    {
+        var props = control.Properties!;
+        const uint defaultForeColor = 0x8000_0012;
+        const uint defaultBackColor = 0x8000_000F;
+        const uint defaultVarious = 0x0000_0000;
+
+        var foreColor = TryGetString(props, "foreColor", out var foreColorText) && TryParseVbaColor(foreColorText, out var parsedFore) ? parsedFore : defaultForeColor;
+        var backColor = TryGetString(props, "backColor", out var backColorText) && TryParseVbaColor(backColorText, out var parsedBack) ? parsedBack : defaultBackColor;
+        var various = TryGetInt(props, "variousPropertyBitsRaw", out var variousRaw) ? unchecked((uint)variousRaw) : defaultVarious;
+        var mousePointer = TryGetInt(props, "mousePointer", out var mousePointerRaw) ? mousePointerRaw : 0;
+        
+        var min = TryGetInt(props, "min", out var minRaw) ? minRaw : 0;
+        var max = TryGetInt(props, "max", out var maxRaw) ? maxRaw : 32767;
+        var position = TryGetInt(props, "position", out var positionRaw) ? positionRaw : 0;
+        var smallChange = TryGetInt(props, "smallChange", out var smallChangeRaw) ? smallChangeRaw : 1;
+        var largeChange = TryGetInt(props, "largeChange", out var largeChangeRaw) ? largeChangeRaw : 1;
+        var orientation = TryGetInt(props, "orientation", out var orientationRaw) ? orientationRaw : -1;
+        var proportionalThumb = props.TryGetValue("proportionalThumb", out var pt) && pt is bool bPt && bPt;
+        var delay = TryGetInt(props, "delay", out var delayRaw) ? delayRaw : 50;
+
+        uint propMask = 0x0000_0008; // fSize (bit 3)
+        if (foreColor != defaultForeColor) propMask |= 1u << 0;
+        if (backColor != defaultBackColor) propMask |= 1u << 1;
+        if (various != defaultVarious) propMask |= 1u << 2;
+        if (mousePointer != 0) propMask |= 1u << 4;
+        if (min != 0) propMask |= 1u << 5;
+        if (max != 32767) propMask |= 1u << 6;
+        if (position != 0) propMask |= 1u << 7;
+        if (smallChange != 1) propMask |= 1u << 11;
+        if (largeChange != 1) propMask |= 1u << 12;
+        if (orientation != -1) propMask |= 1u << 13;
+        if (proportionalThumb) propMask |= 1u << 14;
+        if (delay != 50) propMask |= 1u << 15;
+        if (TryGetString(props, "mouseIcon", out _)) propMask |= 1u << 16;
+
+        using var dataBlock = new MemoryStream();
+        if ((propMask & (1u << 0)) != 0) WriteUInt32(dataBlock, foreColor);
+        if ((propMask & (1u << 1)) != 0) WriteUInt32(dataBlock, backColor);
+        if ((propMask & (1u << 2)) != 0) WriteUInt32(dataBlock, various);
+        if ((propMask & (1u << 4)) != 0) { WritePadding(dataBlock, 4); dataBlock.WriteByte(checked((byte)mousePointer)); }
+        
+        WritePadding(dataBlock, 4);
+        if ((propMask & (1u << 5)) != 0) WriteInt32(dataBlock, min);
+        if ((propMask & (1u << 6)) != 0) WriteInt32(dataBlock, max);
+        if ((propMask & (1u << 7)) != 0) WriteInt32(dataBlock, position);
+        if ((propMask & (1u << 11)) != 0) WriteInt32(dataBlock, smallChange);
+        if ((propMask & (1u << 12)) != 0) WriteInt32(dataBlock, largeChange);
+        if ((propMask & (1u << 13)) != 0) WriteInt32(dataBlock, orientation);
+        if ((propMask & (1u << 14)) != 0) { WritePadding(dataBlock, 4); dataBlock.WriteByte((byte)(proportionalThumb ? 1 : 0)); }
+        WritePadding(dataBlock, 4);
+        if ((propMask & (1u << 15)) != 0) WriteInt32(dataBlock, delay);
+        if ((propMask & (1u << 16)) != 0) { WriteUInt16(dataBlock, 0xFFFF); }
+        
+        WritePadding(dataBlock, 4);
+        
+        if ((propMask & (1u << 3)) != 0)
+        {
+            WriteInt32(dataBlock, control.RawWidth ?? 0);
+            WriteInt32(dataBlock, control.RawHeight ?? 0);
+        }
+
+        var header = new byte[8];
+        header[0] = 0x00;
+        header[1] = 0x02;
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)dataBlock.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), propMask);
+
+        var existingStreamData = Array.Empty<byte>();
+        if (TryGetInt(props, "scrollBarDeclaredEndLocalOffset", out var declaredEnd) && original.Length > 0 && original.Length >= declaredEnd)
+        {
+            existingStreamData = original.Slice(declaredEnd).ToArray();
+        }
+
+        var resultStream = new MemoryStream();
+        resultStream.Write(header);
+        dataBlock.Position = 0;
+        dataBlock.CopyTo(resultStream);
+        resultStream.Write(existingStreamData);
+        return resultStream.ToArray();
+    }
+
+    private static byte[] SerializeSpinButtonRebuilt(ControlInfo control, ReadOnlySpan<byte> original)
+    {
+        var props = control.Properties!;
+        const uint defaultForeColor = 0x8000_0012;
+        const uint defaultBackColor = 0x8000_000F;
+        const uint defaultVarious = 0x0000_0000;
+
+        var foreColor = TryGetString(props, "foreColor", out var foreColorText) && TryParseVbaColor(foreColorText, out var parsedFore) ? parsedFore : defaultForeColor;
+        var backColor = TryGetString(props, "backColor", out var backColorText) && TryParseVbaColor(backColorText, out var parsedBack) ? parsedBack : defaultBackColor;
+        var various = TryGetInt(props, "variousPropertyBitsRaw", out var variousRaw) ? unchecked((uint)variousRaw) : defaultVarious;
+        var mousePointer = TryGetInt(props, "mousePointer", out var mousePointerRaw) ? mousePointerRaw : 0;
+        
+        var min = TryGetInt(props, "min", out var minRaw) ? minRaw : 0;
+        var max = TryGetInt(props, "max", out var maxRaw) ? maxRaw : 100;
+        var position = TryGetInt(props, "position", out var positionRaw) ? positionRaw : 0;
+        var smallChange = TryGetInt(props, "smallChange", out var smallChangeRaw) ? smallChangeRaw : 1;
+        var orientation = TryGetInt(props, "orientation", out var orientationRaw) ? orientationRaw : -1;
+        var delay = TryGetInt(props, "delay", out var delayRaw) ? delayRaw : 50;
+
+        uint propMask = 0x0000_0008; // fSize (bit 3)
+        if (foreColor != defaultForeColor) propMask |= 1u << 0;
+        if (backColor != defaultBackColor) propMask |= 1u << 1;
+        if (various != defaultVarious) propMask |= 1u << 2;
+        if (min != 0) propMask |= 1u << 5;
+        if (max != 100) propMask |= 1u << 6;
+        if (position != 0) propMask |= 1u << 7;
+        if (smallChange != 1) propMask |= 1u << 10;
+        if (orientation != -1) propMask |= 1u << 11;
+        if (delay != 50) propMask |= 1u << 12;
+        if (TryGetString(props, "mouseIcon", out _)) propMask |= 1u << 13;
+        if (mousePointer != 0) propMask |= 1u << 14;
+
+        using var dataBlock = new MemoryStream();
+        if ((propMask & (1u << 0)) != 0) WriteUInt32(dataBlock, foreColor);
+        if ((propMask & (1u << 1)) != 0) WriteUInt32(dataBlock, backColor);
+        if ((propMask & (1u << 2)) != 0) WriteUInt32(dataBlock, various);
+        
+        WritePadding(dataBlock, 4);
+        if ((propMask & (1u << 5)) != 0) WriteInt32(dataBlock, min);
+        if ((propMask & (1u << 6)) != 0) WriteInt32(dataBlock, max);
+        if ((propMask & (1u << 7)) != 0) WriteInt32(dataBlock, position);
+        if ((propMask & (1u << 10)) != 0) WriteInt32(dataBlock, smallChange);
+        if ((propMask & (1u << 11)) != 0) WriteInt32(dataBlock, orientation);
+        if ((propMask & (1u << 12)) != 0) WriteInt32(dataBlock, delay);
+        if ((propMask & (1u << 13)) != 0) { WriteUInt16(dataBlock, 0xFFFF); }
+        if ((propMask & (1u << 14)) != 0) { WritePadding(dataBlock, 4); dataBlock.WriteByte(checked((byte)mousePointer)); }
+        
+        WritePadding(dataBlock, 4);
+        
+        if ((propMask & (1u << 3)) != 0)
+        {
+            WriteInt32(dataBlock, control.RawWidth ?? 0);
+            WriteInt32(dataBlock, control.RawHeight ?? 0);
+        }
+
+        var header = new byte[8];
+        header[0] = 0x00;
+        header[1] = 0x02;
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)dataBlock.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), propMask);
+
+        var existingStreamData = Array.Empty<byte>();
+        if (TryGetInt(props, "spinButtonDeclaredEndLocalOffset", out var declaredEnd) && original.Length > 0 && original.Length >= declaredEnd)
+        {
+            existingStreamData = original.Slice(declaredEnd).ToArray();
+        }
+
+        var resultStream = new MemoryStream();
+        resultStream.Write(header);
+        dataBlock.Position = 0;
+        dataBlock.CopyTo(resultStream);
+        resultStream.Write(existingStreamData);
+        return resultStream.ToArray();
+    }
+
+    private static byte[] SerializeTabStripRebuilt(ControlInfo control)
+    {
+        var props = control.Properties!;
+        var request = new GeneratedControlRequest(
+            control.Type,
+            control.Name,
+            SiteId: 0,
+            TabIndex: TryGetInt(props, "tabIndex", out var tabIndex) ? tabIndex : 0,
+            Left: control.Left ?? 0,
+            Top: control.Top ?? 0,
+            Width: control.RawWidth ?? 0,
+            Height: control.RawHeight ?? 0,
+            Caption: TryGetString(props, "caption", out var caption) ? caption : control.Name,
+            Value: TryGetString(props, "value", out var value) ? value : string.Empty,
+            Properties: props);
+        var schema = new TabStripControlSchema();
         return schema.BuildObjectPayload(request);
     }
 

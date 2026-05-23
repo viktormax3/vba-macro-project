@@ -23,6 +23,8 @@ internal sealed class UserFormProject
     public required string FrmPath { get; init; }
     public required string FrxPath { get; init; }
     public required string FrmText { get; init; }
+    public required string FormDefinition { get; init; }
+    public required string VbaCode { get; init; }
     public required Encoding Encoding { get; init; }
     public required string FormName { get; init; }
     public required Dictionary<string, object?> FormProperties { get; init; }
@@ -37,8 +39,17 @@ internal sealed class UserFormProject
         }
 
         var encoding = DetectEncoding(frmPath);
-        var text = File.ReadAllText(frmPath, encoding);
-        var oleMatch = OleObjectBlobRegex.Match(text);
+        var frmText = File.ReadAllText(frmPath, encoding);
+        var (formDef, vbaCode) = SplitFrmText(frmText);
+        var formProperties = ParseFormProperties(frmText);
+
+        var formName = FormNameRegex.Match(frmText).Groups["name"].Value;
+        if (string.IsNullOrWhiteSpace(formName))
+        {
+            formName = Path.GetFileNameWithoutExtension(frmPath);
+        }
+
+        var oleMatch = OleObjectBlobRegex.Match(frmText);
         if (!oleMatch.Success)
         {
             throw new CliException("Could not find OleObjectBlob reference in FRM.");
@@ -51,23 +62,30 @@ internal sealed class UserFormProject
             throw new CliException($"Referenced FRX file not found: {frxPath}");
         }
 
-        var formName = FormNameRegex.Match(text).Groups["name"].Value;
-        if (string.IsNullOrWhiteSpace(formName))
-        {
-            formName = Path.GetFileNameWithoutExtension(frmPath);
-        }
-
         return new UserFormProject
         {
             FrmPath = frmPath,
             FrxPath = frxPath,
-            FrmText = text,
+            FrmText = frmText,
+            FormDefinition = formDef,
+            VbaCode = vbaCode,
             Encoding = encoding,
             FormName = formName,
-            FormProperties = ParseFormProperties(text),
-            KnownControlNames = ExtractKnownControlNames(text, formName),
+            FormProperties = formProperties,
+            KnownControlNames = ExtractKnownControlNames(frmText, formName),
             ControlScopes = LoadScopes(frmPath),
         };
+    }
+
+    public static (string formDef, string vbaCode) SplitFrmText(string frmText)
+    {
+        var match = Regex.Match(frmText, @"^(Attribute\s+VB_[A-Za-z0-9_]+\s*=\s*.*?\r?\n)+", RegexOptions.Multiline);
+        if (match.Success)
+        {
+            var splitIndex = match.Index + match.Length;
+            return (frmText.Substring(0, splitIndex), frmText.Substring(splitIndex));
+        }
+        return (frmText, string.Empty);
     }
 
     public static string ReplaceOleObjectBlob(string frmText, string frxFileName) =>
@@ -121,7 +139,7 @@ internal sealed class UserFormProject
             return new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
         }
 
-        return Encoding.Default;
+        return Encoding.GetEncoding(1252);
     }
 
     private static Dictionary<string, object?> ParseFormProperties(string frmText)

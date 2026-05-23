@@ -8,6 +8,28 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    private static string ApplyVbaFile(string updatedFrm, string? patchPath, string frmPath, Encoding encoding)
+    {
+        string? vbaFile = null;
+        if (patchPath is not null)
+        {
+            var p = Path.ChangeExtension(patchPath, ".vba");
+            if (File.Exists(p)) vbaFile = p;
+        }
+        if (vbaFile is null)
+        {
+            var f = Path.ChangeExtension(frmPath, ".frm.vba");
+            if (File.Exists(f)) vbaFile = f;
+        }
+
+        if (vbaFile is not null)
+        {
+            var (def, _) = UserFormProject.SplitFrmText(updatedFrm);
+            return def + File.ReadAllText(vbaFile, encoding);
+        }
+        return updatedFrm;
+    }
+
     public int Run(string[] args)
     {
         try
@@ -75,6 +97,12 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                 ExtractImages(patchDocument, outPath);
             }
             
+            if (outPath is not null)
+            {
+                var vbaOut = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outPath))!, project.FormName + ".vba");
+                File.WriteAllText(vbaOut, project.VbaCode.TrimStart('\r', '\n'), project.Encoding);
+            }
+            
             WriteJson(outPath, patchDocument);
         }
         else
@@ -127,6 +155,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
         var targetLayout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
         VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
+        updatedFrm = ApplyVbaFile(updatedFrm, parsed.GetOption("patch"), frmPath, project.Encoding);
         updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
         updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
@@ -185,6 +214,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+        updatedFrm = ApplyVbaFile(updatedFrm, parsed.GetOption("patch"), frmPath, project.Encoding);
         updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch?.Code);
         updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
@@ -232,7 +262,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
         var generated = GeneratedUserFormFactory.Create(formName, caption, widthPt, heightPt, Path.GetFileName(outFrxPath));
         File.WriteAllBytes(outFrxPath, generated.FrxBytes);
-        File.WriteAllText(outFrmPath, generated.FrmText, Encoding.Default);
+        File.WriteAllText(outFrmPath, generated.FrmText, Encoding.GetEncoding(1252));
 
         if (parsed.GetOption("patch") is { } patchPath)
         {
@@ -250,6 +280,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
             var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
             updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+            updatedFrm = ApplyVbaFile(updatedFrm, patchPath, outFrmPath, project.Encoding);
             updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
             updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
             File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
@@ -443,10 +474,31 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                     var s = props[key].GetString();
                     if (s != null && s.StartsWith("base64:", StringComparison.OrdinalIgnoreCase))
                     {
-                        var base64 = s["base64:".Length..];
-                        var fileName = $"{prefix}_{key}.bin";
+                        var bytes = Convert.FromBase64String(s["base64:".Length..]);
+                        var ext = ".bin";
+                        if (bytes.Length > 24 &&
+                            bytes[0] == 0x04 && bytes[1] == 0x52 && bytes[2] == 0xE3 && bytes[3] == 0x0B &&
+                            bytes[4] == 0x91 && bytes[5] == 0x8F && bytes[6] == 0xCE && bytes[7] == 0x11 &&
+                            bytes[8] == 0x9D && bytes[9] == 0xE3 && bytes[10] == 0x00 && bytes[11] == 0xAA &&
+                            bytes[12] == 0x00 && bytes[13] == 0x4B && bytes[14] == 0xB8 && bytes[15] == 0x51 &&
+                            bytes[16] == 0x6C && bytes[17] == 0x74 && bytes[18] == 0x00 && bytes[19] == 0x00)
+                        {
+                            bytes = bytes[24..];
+                        }
+                        
+                        if (bytes.Length >= 4)
+                        {
+                            if (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x01 && bytes[3] == 0x00) ext = ".ico";
+                            else if (bytes[0] == 0x42 && bytes[1] == 0x4D) ext = ".bmp";
+                            else if (bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) ext = ".jpg";
+                            else if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47) ext = ".png";
+                            else if (bytes[0] == 0xD7 && bytes[1] == 0xCD && bytes[2] == 0xC6 && bytes[3] == 0x9A) ext = ".wmf";
+                            else if (bytes[0] == 0x01 && bytes[1] == 0x00 && bytes[2] == 0x09 && bytes[3] == 0x00) ext = ".wmf"; // Some WMF/EMF headers
+                        }
+                        
+                        var fileName = $"{prefix}_{key}{ext}";
                         var fullPath = Path.Combine(outDir, fileName);
-                        File.WriteAllBytes(fullPath, Convert.FromBase64String(base64));
+                        File.WriteAllBytes(fullPath, bytes);
                         props[key] = JsonSerializer.SerializeToElement($"file://{fileName}");
                     }
                 }
