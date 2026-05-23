@@ -60,10 +60,11 @@ internal static class PatchDocumentGenerator
         return name;
     }
 
-    public static PatchDocument FromRaw(LayoutInspection raw, string formName)
+    public static PatchDocument FromRaw(LayoutInspection raw, string formName, bool asTemplate = false)
     {
         var properties = new Dictionary<string, Dictionary<string, JsonElement>>(StringComparer.OrdinalIgnoreCase);
         var layout = new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase);
+        var addList = asTemplate ? new List<AddControlPatch>() : null;
 
         // Map form properties
         var formProps = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
@@ -173,12 +174,23 @@ internal static class PatchDocumentGenerator
             }
 
             properties[control.Name] = ConvertToJsonElements(cleanedProps);
+
+            if (asTemplate)
+            {
+                addList!.Add(new AddControlPatch
+                {
+                    Type = control.Type,
+                    Name = control.Name,
+                    Parent = control.Parent ?? ""
+                });
+            }
         }
 
         return new PatchDocument
         {
             Layout = null,
-            Properties = properties
+            Properties = properties,
+            Add = addList
         };
     }
 

@@ -64,9 +64,10 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             layout.Controls,
             layout.FrxFormControl,
             layout.ParserValidation);
-        if (parsed.GetOption("as-patch") is not null)
+        if (parsed.GetOption("as-patch") is not null || parsed.GetOption("as-template") is not null)
         {
-            var patchDocument = FrxEdit.Cli.MsForms.Model.PatchDocumentGenerator.FromRaw(layout, project.FormName);
+            var isTemplate = parsed.GetOption("as-template") is not null;
+            var patchDocument = FrxEdit.Cli.MsForms.Model.PatchDocumentGenerator.FromRaw(layout, project.FormName, asTemplate: isTemplate);
             WriteJson(parsed.GetOption("out"), patchDocument);
         }
         else
@@ -431,6 +432,10 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
     private void PrintHelp()
     {
         stdout.WriteLine("frxedit inspect <UserForm.frm> [--mode tolerant|strict|legacy] [--out layout.json]");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> --as-patch --out layout.patch.json");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> --as-template --out layout.template.json");
+        stdout.WriteLine("  --as-patch exports properties only for in-place modifications.");
+        stdout.WriteLine("  --as-template exports both properties and structural layout to clone the form from scratch.");
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
         stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");

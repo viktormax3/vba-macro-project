@@ -60,6 +60,11 @@ internal static class PatchValidator
                 continue;
             }
 
+            if (patch.Add?.Any(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase)) == true)
+            {
+                continue;
+            }
+
             throw new CliException($"Layout target '{name}' does not exist.");
         }
 
@@ -86,6 +91,11 @@ internal static class PatchValidator
             }
 
             if (patch.Renames?.Values.Contains(name, StringComparer.OrdinalIgnoreCase) == true)
+            {
+                continue;
+            }
+
+            if (patch.Add?.Any(a => string.Equals(a.Name, name, StringComparison.OrdinalIgnoreCase)) == true)
             {
                 continue;
             }
