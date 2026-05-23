@@ -2,7 +2,7 @@
 
 FrxEdit and its schema validation engine fully support the core 15 MS-Forms controls. The following diagrams define the supported properties, their expected JSON types, and valid values.
 
-*Note: All controls implicitly support basic layout properties like `name` (string), `left` (number), `top` (number), `width` (number), `height` (number), `tabIndex` (integer), and `tabStop` (boolean).*
+*Note: All controls implicitly support basic layout properties like `name` (string), `leftPt` (float, Points), `topPt` (float, Points), `widthPt` (float, Points), `heightPt` (float, Points), `tabIndex` (uint16, 0-65535), and `tabStop` (boolean).*
 
 ## Control Property Schemas
 
