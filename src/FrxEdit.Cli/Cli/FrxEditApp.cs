@@ -637,18 +637,31 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
     private void PrintHelp()
     {
+        stdout.WriteLine("=================================================");
+        stdout.WriteLine(" FrxEdit CLI - MS Forms Reverse Engineering Tool ");
+        stdout.WriteLine("=================================================\n");
+
+        stdout.WriteLine("--- CORE COMMANDS ---");
+        
         stdout.WriteLine("frxedit inspect <UserForm.frm> [--mode tolerant|strict|legacy] [--out layout.json]");
         stdout.WriteLine("frxedit inspect <UserForm.frm> --as-patch --out layout.patch.json");
-        stdout.WriteLine("frxedit inspect <UserForm.frm> --as-template --out layout.template.json [--extract-images]");
-        stdout.WriteLine("  --as-patch exports properties only for in-place modifications.");
-        stdout.WriteLine("  --as-template exports both properties and structural layout to clone the form from scratch.");
-        stdout.WriteLine("  --extract-images extracts base64 picture/mouseIcon to separate binary files and uses file:// references.");
-        stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
-        stdout.WriteLine("frxedit build <UserForm.frm> [<patch.json>] --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode full-patch] [--report-out rebuild.report.json]");
-        stdout.WriteLine("  build regenerates the OLE/CFB container. Merges patch structural changes, code and properties seamlessly. stream-mode defaults to full-patch.");
-        stdout.WriteLine("frxedit create <UserFormNew.frm> --name UserFormNew [--caption Demo] [--widthPt 340] [--heightPt 240] [--patch form.patch.json]");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> --as-template --out layout.template.json");
+        stdout.WriteLine("  --as-patch        Exports properties only for in-place modifications (default: extracts images to subfolder).");
+        stdout.WriteLine("  --as-template     Exports both properties and structural layout to clone the form from scratch.");
+        stdout.WriteLine("  --extract-images  Extracts base64 picture/mouseIcon to separate binary files and uses file:// references.\n");
+
         stdout.WriteLine("frxedit watch <UserForm.frm> [<patch.json>] [--out <UserForm.patched.frm>]");
-        stdout.WriteLine("  watch automatically rebuilds the UserForm when the JSON, VBA, or image assets change.");
+        stdout.WriteLine("  Automatically rebuilds the UserForm when the JSON, VBA, or image assets change.\n");
+
+        stdout.WriteLine("frxedit build <UserForm.frm> [<patch.json>] --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode full-patch]");
+        stdout.WriteLine("  Regenerates the OLE/CFB container. Merges patch structural changes, code and properties seamlessly.\n");
+
+        stdout.WriteLine("frxedit create <UserFormNew.frm> --name UserFormNew [--caption Demo] [--widthPt 340] [--heightPt 240] [--patch form.patch.json]\n");
+
+        stdout.WriteLine("--- DIAGNOSTIC & DEBUG COMMANDS ---");
+        stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
+        stdout.WriteLine("  --raw-out         Dumps raw property identifiers and streams for deep diagnostic analysis.\n");
+
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");

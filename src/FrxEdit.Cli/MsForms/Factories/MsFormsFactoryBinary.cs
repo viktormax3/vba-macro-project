@@ -165,19 +165,11 @@ internal static class MsFormsFactoryBinary
 
     public static uint ParseColor(string? text, uint fallback)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        if (FrxEdit.Cli.MsForms.OleColorConverter.TryParse(text ?? string.Empty, out var value))
         {
-            return fallback;
+            return value;
         }
 
-        text = text.Trim();
-        if (text.StartsWith("&H", StringComparison.OrdinalIgnoreCase) &&
-            text.EndsWith('&') &&
-            uint.TryParse(text[2..^1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var vbaColor))
-        {
-            return vbaColor;
-        }
-
-        return uint.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var raw) ? raw : fallback;
+        return fallback;
     }
 }

@@ -1228,14 +1228,7 @@ internal static class ObjectPayloadSerializer
 
     private static bool TryParseVbaColor(string text, out uint value)
     {
-        value = 0;
-        text = text.Trim();
-        if (text.StartsWith("&H", StringComparison.OrdinalIgnoreCase) && text.EndsWith('&'))
-        {
-            return uint.TryParse(text[2..^1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
-        }
-
-        return uint.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+        return FrxEdit.Cli.MsForms.OleColorConverter.TryParse(text, out value);
     }
 
     private static void WriteCount(Stream stream, int count, bool compressed = true)

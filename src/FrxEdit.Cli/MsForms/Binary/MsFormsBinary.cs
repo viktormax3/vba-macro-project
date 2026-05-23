@@ -23,7 +23,7 @@ internal static class MsFormsBinary
     {
         Align(ref cursor, alignment);
         var value = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(cursor, 4));
-        properties[property] = formatColor ? $"&H{value:X8}&" : value;
+        properties[property] = formatColor ? FrxEdit.Cli.MsForms.OleColorConverter.ToHuman(value) : value;
         properties[$"{property}LocalOffset"] = cursor;
         properties[$"{property}Offset"] = fileOffsets[cursor];
         cursor += 4;

@@ -220,8 +220,8 @@ internal static class PatchDocumentGenerator
             AddDefault(values, sources, "tabStop", true);
             AddDefault(values, sources, "wordWrap", false);
             AddDefault(values, sources, "autoSize", false);
-            AddDefault(values, sources, "backColor", "&H8000000F&");
-            AddDefault(values, sources, "foreColor", "&H80000012&");
+            AddDefault(values, sources, "backColor", "systemButtonFace");
+            AddDefault(values, sources, "foreColor", "systemButtonText");
             AddDefault(values, sources, "fontName", "Tahoma");
             AddDefault(values, sources, "fontSize", 8);
         }
@@ -232,9 +232,9 @@ internal static class PatchDocumentGenerator
             AddDefault(values, sources, "visible", true);
             AddDefault(values, sources, "locked", false);
             AddDefault(values, sources, "tabStop", true);
-            AddDefault(values, sources, "backColor", "&H80000005&");
-            AddDefault(values, sources, "foreColor", "&H80000008&");
-            AddDefault(values, sources, "borderColor", "&H80000006&");
+            AddDefault(values, sources, "backColor", "systemWindow");
+            AddDefault(values, sources, "foreColor", "systemWindowText");
+            AddDefault(values, sources, "borderColor", "systemWindowFrame");
             AddDefault(values, sources, "backStyle", 1);
             AddDefault(values, sources, "wordWrap", true);
             AddDefault(values, sources, "autoSize", false);
@@ -261,9 +261,9 @@ internal static class PatchDocumentGenerator
         if (controlType.Equals("ComboBox", StringComparison.OrdinalIgnoreCase) ||
             controlType.Equals("ListBox", StringComparison.OrdinalIgnoreCase))
         {
-            AddDefault(values, sources, "backColor", "&H80000005&");
-            AddDefault(values, sources, "foreColor", "&H80000008&");
-            AddDefault(values, sources, "borderColor", "&H80000006&");
+            AddDefault(values, sources, "backColor", "systemWindow");
+            AddDefault(values, sources, "foreColor", "systemWindowText");
+            AddDefault(values, sources, "borderColor", "systemWindowFrame");
             AddDefault(values, sources, "borderStyle", 1);
             AddDefault(values, sources, "specialEffect", 2);
             AddDefault(values, sources, "boundColumn", 1);
@@ -295,8 +295,8 @@ internal static class PatchDocumentGenerator
             controlType.Equals("OptionButton", StringComparison.OrdinalIgnoreCase))
         {
             AddDefault(values, sources, "value", "0");
-            AddDefault(values, sources, "backColor", "&H8000000F&");
-            AddDefault(values, sources, "foreColor", "&H80000008&");
+            AddDefault(values, sources, "backColor", "systemButtonFace");
+            AddDefault(values, sources, "foreColor", "systemWindowText");
             AddDefault(values, sources, "enabled", true);
             AddDefault(values, sources, "visible", true);
             AddDefault(values, sources, "locked", false);
@@ -336,7 +336,7 @@ internal static class PatchDocumentGenerator
             string.Equals(controlType, "OptionButton", StringComparison.OrdinalIgnoreCase))
         {
             return name.ToLowerInvariant() is
-                "caption" or "value" or "groupname" or "fontname" or "fontsize" or "backcolor" or
+                "caption" or "value" or "groupname" or "fontname" or "fontsize" or "fontweight" or "fontitalic" or "fontunderline" or "fontstrikethrough" or "fontcharset" or "backcolor" or
                 "forecolor" or "enabled" or "locked" or "backstyle" or "alignment" or "wordwrap" or
                 "autosize" or "imemode" or "specialeffect" or "mousepointer" or "pictureposition" or
                 "picture" or "mouseicon" or
@@ -347,7 +347,7 @@ internal static class PatchDocumentGenerator
         if (string.Equals(controlType, "CommandButton", StringComparison.OrdinalIgnoreCase))
         {
             return name.ToLowerInvariant() is
-                "caption" or "fontname" or "fontsize" or "backcolor" or "forecolor" or
+                "caption" or "fontname" or "fontsize" or "fontweight" or "fontitalic" or "fontunderline" or "fontstrikethrough" or "fontcharset" or "backcolor" or "forecolor" or
                 "enabled" or "locked" or "wordwrap" or "autosize" or "mousepointer" or "pictureposition" or
                 "picture" or "mouseicon" or "picturesizemode" or "picturealignment" or "picturetiling" or
                 "accelerator" or "takefocusonclick" or "textalign" or "paragraphalign" or "tabindex" or "tabstop" or "visible" or "default" or "cancel" or
@@ -355,7 +355,7 @@ internal static class PatchDocumentGenerator
         }
 
         return name.ToLowerInvariant() is
-            "value" or "fontname" or "fontsize" or "backcolor" or "forecolor" or "bordercolor" or
+            "value" or "fontname" or "fontsize" or "fontweight" or "fontitalic" or "fontunderline" or "fontstrikethrough" or "fontcharset" or "backcolor" or "forecolor" or "bordercolor" or
             "enabled" or "locked" or "backstyle" or "autosize" or "autotab" or "autowordselect" or
             "dragbehavior" or "enterfieldbehavior" or "enterkeybehavior" or "hideselection" or
             "integralheight" or "multiline" or "selectionmargin" or "tabkeybehavior" or "wordwrap" or

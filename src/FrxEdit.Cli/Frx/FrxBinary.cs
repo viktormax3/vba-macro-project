@@ -1881,7 +1881,8 @@ internal sealed class FrxBinary
                 continue;
             }
 
-            return $"&H80{likelyBgr[2]:X2}{likelyBgr[1]:X2}{likelyBgr[0]:X2}&";
+            var color = (uint)((likelyBgr[2] << 16) | (likelyBgr[1] << 8) | likelyBgr[0]);
+            return FrxEdit.Cli.MsForms.OleColorConverter.ToHuman(color);
         }
 
         return null;
