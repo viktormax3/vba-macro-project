@@ -43,10 +43,10 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             return args[0].ToLowerInvariant() switch
             {
                 "inspect" => Inspect(args[1..]),
-                "apply" => Apply(args[1..]),
+                "build" => Build(args[1..]),
                 "validate" => Validate(args[1..]),
-                "rebuild" => Rebuild(args[1..]),
                 "create" => Create(args[1..]),
+                "watch" => Watch(args[1..]),
                 "dump-records" => DumpRecords(args[1..]),
                 "dump-storage" => DumpStorage(args[1..]),
                 "dump-stream-records" => DumpStreamRecords(args[1..]),
@@ -92,9 +92,9 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             var patchDocument = FrxEdit.Cli.MsForms.Model.PatchDocumentGenerator.FromRaw(layout, project.FormName, asTemplate: isTemplate);
             
             var outPath = parsed.GetOption("out");
-            if (parsed.GetOption("extract-images") is not null && outPath is not null)
+            if (outPath is not null)
             {
-                ExtractImages(patchDocument, outPath);
+                ExtractImages(patchDocument, outPath, project.FormName);
             }
             
             if (outPath is not null)
@@ -119,64 +119,23 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         return 0;
     }
 
-    private int Apply(string[] args)
+    private int Build(string[] args)
     {
-        var parsed = CommandLine.Parse(args, minPositionals: 2, maxPositionals: 2);
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 2);
         var frmPath = Path.GetFullPath(parsed.Positionals[0]);
-        var patchPath = Path.GetFullPath(parsed.Positionals[1]);
-        var outFrmPath = Path.GetFullPath(parsed.RequireOption("out"));
-
-        var patch = JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(patchPath), JsonOptions)
-            ?? throw new CliException("Patch file is empty.");
-        patch.Normalize();
-        if (patch.Add is { Count: > 0 })
-        {
-            throw new CliException("The in-place apply command does not support 'add'. Use rebuild --stream-mode full-patch.");
-        }
-
-        if (patch.Remove is { Count: > 0 })
-        {
-            throw new CliException("The in-place apply command does not support 'remove'. Use rebuild --stream-mode full-patch.");
-        }
-
-        var project = UserFormProject.Load(frmPath);
-        var frx = FrxBinary.Read(project.FrxPath);
-        var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
-        var layout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
-        PatchValidator.Validate(patch, layout.Controls);
-
-        frx.Apply(patch, project.KnownControlNames, project.ControlScopes, parserMode);
-
-        var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
-        Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
-        File.WriteAllBytes(outFrxPath, frx.Bytes);
-
-        var updatedFrm = VbaRenamer.Apply(project.FrmText, patch.Renames);
-        updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
-        var targetLayout = frx.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
-        VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
-        updatedFrm = ApplyVbaFile(updatedFrm, parsed.GetOption("patch"), frmPath, project.Encoding);
-        updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch.Code);
-        updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
-        File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
-        UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch.Renames, patch.Remove);
-
-        stdout.WriteLine($"Wrote {outFrmPath}");
-        stdout.WriteLine($"Wrote {outFrxPath}");
-        return 0;
-    }
-
-
-    private int Rebuild(string[] args)
-    {
-        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 1);
-        var frmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var patchPath = parsed.Positionals.Count > 1 
+            ? Path.GetFullPath(parsed.Positionals[1])
+            : parsed.GetOption("patch") is { } p ? Path.GetFullPath(p) : null;
+            
         var outFrmPath = Path.GetFullPath(parsed.RequireOption("out"));
         var parserMode = parsed.GetParserModeOption("mode", ParserMode.Strict);
-        var streamMode = ParseRebuildStreamMode(parsed.GetOption("stream-mode"));
+        var streamModeStr = parsed.GetOption("stream-mode");
+        var streamMode = streamModeStr is not null 
+            ? ParseRebuildStreamMode(streamModeStr) 
+            : RebuildStreamMode.FormAndObjectPatch;
 
-        var patch = parsed.GetOption("patch") is { } patchPath
-            ? JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(Path.GetFullPath(patchPath)), JsonOptions)
+        var patch = patchPath is not null
+            ? JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(patchPath), JsonOptions)
                 ?? throw new CliException("Patch file is empty.")
             : null;
         patch?.Normalize();
@@ -214,7 +173,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
         updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
-        updatedFrm = ApplyVbaFile(updatedFrm, parsed.GetOption("patch"), frmPath, project.Encoding);
+        updatedFrm = ApplyVbaFile(updatedFrm, patchPath, frmPath, project.Encoding);
         updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch?.Code);
         updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
         File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
@@ -287,11 +246,147 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         }
 
         var validationProject = UserFormProject.Load(outFrmPath);
-        var validation = FrxBinary.Read(validationProject.FrxPath).Inspect(validationProject.KnownControlNames, validationProject.ControlScopes, ParserMode.Strict, validationProject.FormProperties);
+        var validationFrx = FrxBinary.Read(validationProject.FrxPath);
+        validationFrx.Inspect(validationProject.KnownControlNames, validationProject.ControlScopes, ParserMode.Strict, validationProject.FormProperties);
 
         stdout.WriteLine($"Wrote {outFrmPath}");
         stdout.WriteLine($"Wrote {outFrxPath}");
-        stdout.WriteLine($"OK: created UserForm '{formName}' with {validation.Controls.Count} controls");
+        return 0;
+    }
+
+    private int Watch(string[] args)
+    {
+        var parsed = CommandLine.Parse(args, minPositionals: 1, maxPositionals: 2);
+        var frmPath = Path.GetFullPath(parsed.Positionals[0]);
+        var patchPath = parsed.Positionals.Count > 1
+            ? Path.GetFullPath(parsed.Positionals[1])
+            : Path.ChangeExtension(frmPath, ".json");
+        var outFrmPath = parsed.GetOption("out") != null
+            ? Path.GetFullPath(parsed.GetOption("out")!)
+            : frmPath; // default to in-place replacement
+        
+        var parserMode = parsed.GetParserModeOption("mode", ParserMode.Tolerant);
+
+        string patchDir = Path.GetDirectoryName(patchPath)!;
+        string vbaPath = Path.ChangeExtension(patchPath, ".vba");
+        if (!File.Exists(vbaPath))
+        {
+            vbaPath = Path.ChangeExtension(frmPath, ".frm.vba");
+        }
+
+        stdout.WriteLine($"Watching for changes...");
+        stdout.WriteLine($"  Base FRM: {frmPath}");
+        stdout.WriteLine($"  Patch JSON: {patchPath}");
+        stdout.WriteLine($"  VBA File: {vbaPath}");
+        stdout.WriteLine($"  Output FRM: {outFrmPath}");
+        stdout.WriteLine($"Press Ctrl+C to exit.");
+
+        System.Threading.Timer? debounceTimer = null;
+        var syncRoot = new object();
+
+        void TriggerRebuild(object? state)
+        {
+            lock (syncRoot)
+            {
+                try
+                {
+                    stdout.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] Change detected. Rebuilding...");
+                    var streamMode = RebuildStreamMode.FormAndObjectPatch;
+                    
+                    var patch = JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(patchPath), JsonOptions)
+                        ?? throw new CliException("Patch file is empty.");
+
+                    var project = UserFormProject.Load(frmPath);
+                    var source = FrxBinary.Read(project.FrxPath);
+                    var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
+                    PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
+
+                    RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true, formName: project.FormName);
+                    var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true, formName: project.FormName, patchDir: patchDir);
+                    VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
+
+                    var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, streamMode);
+
+                    var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
+                    Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
+                    File.WriteAllBytes(outFrxPath, rebuiltBytes);
+
+                    var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
+                    updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
+                    updatedFrm = ApplyVbaFile(updatedFrm, patchPath, frmPath, project.Encoding);
+                    updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch?.Code);
+                    updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
+                    File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
+                    
+                    var removedScopeNames = targetLayout.RemovedControls?.Select(control => control.Name).ToList() ?? patch?.Remove;
+                    UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames, removedScopeNames);
+
+                    stdout.WriteLine($"[{DateTime.Now:HH:mm:ss}] Successfully rebuilt {Path.GetFileName(outFrmPath)}");
+                }
+                catch (Exception ex)
+                {
+                    stderr.WriteLine($"[{DateTime.Now:HH:mm:ss}] Error during rebuild: {ex.Message}");
+                    if (ex is not CliException && ex is not System.Text.Json.JsonException && ex is not IOException)
+                    {
+                        stderr.WriteLine(ex.StackTrace);
+                    }
+                }
+            }
+        }
+
+        void OnFileChanged(object sender, FileSystemEventArgs e)
+        {
+            // Trigger if the changed file is our JSON, our VBA file, or any image file in the directory
+            var ext = Path.GetExtension(e.FullPath).ToLowerInvariant();
+            var isImage = ext is ".bin" or ".jpg" or ".jpeg" or ".bmp" or ".png" or ".gif" or ".ico" or ".wmf";
+            
+            if (string.Equals(e.FullPath, patchPath, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(e.FullPath, vbaPath, StringComparison.OrdinalIgnoreCase) ||
+                isImage)
+            {
+                lock (syncRoot)
+                {
+                    debounceTimer?.Dispose();
+                    debounceTimer = new System.Threading.Timer(TriggerRebuild, null, 250, Timeout.Infinite);
+                }
+            }
+        }
+
+        using var watcher = new FileSystemWatcher(patchDir);
+        watcher.IncludeSubdirectories = false;
+        watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size;
+        watcher.Changed += OnFileChanged;
+        watcher.Created += OnFileChanged;
+        watcher.Renamed += (s, e) => OnFileChanged(s, new FileSystemEventArgs(WatcherChangeTypes.Renamed, e.FullPath, e.Name!));
+        watcher.EnableRaisingEvents = true;
+
+        var projectInfo = UserFormProject.Load(frmPath);
+        string assetsDir = Path.Combine(patchDir, projectInfo.FormName);
+        Directory.CreateDirectory(assetsDir);
+        
+        using var assetsWatcher = new FileSystemWatcher(assetsDir);
+        assetsWatcher.IncludeSubdirectories = false;
+        assetsWatcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size;
+        assetsWatcher.Changed += OnFileChanged;
+        assetsWatcher.Created += OnFileChanged;
+        assetsWatcher.Renamed += (s, e) => OnFileChanged(s, new FileSystemEventArgs(WatcherChangeTypes.Renamed, e.FullPath, e.Name!));
+        assetsWatcher.EnableRaisingEvents = true;
+
+        if (frmPath != outFrmPath)
+        {
+            // First time rebuild to ensure outFrmPath is populated
+            TriggerRebuild(null);
+        }
+
+        // Wait indefinitely until Ctrl+C is pressed
+        var tcs = new TaskCompletionSource();
+        Console.CancelKeyPress += (s, e) =>
+        {
+            e.Cancel = true;
+            tcs.TrySetResult();
+        };
+        tcs.Task.Wait();
+
         return 0;
     }
 
@@ -460,9 +555,13 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine($"Wrote {Path.GetFullPath(outPath)}");
     }
 
-    private void ExtractImages(PatchDocument patch, string outPath)
+    private void ExtractImages(PatchDocument patch, string outPath, string formName)
     {
         var outDir = Path.GetDirectoryName(Path.GetFullPath(outPath)) ?? "";
+        var assetsDirName = formName;
+        var fullAssetsDir = Path.Combine(outDir, assetsDirName);
+        
+        bool directoryCreated = false;
         
         void ProcessProperties(Dictionary<string, JsonElement>? props, string prefix)
         {
@@ -496,10 +595,18 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                             else if (bytes[0] == 0x01 && bytes[1] == 0x00 && bytes[2] == 0x09 && bytes[3] == 0x00) ext = ".wmf"; // Some WMF/EMF headers
                         }
                         
+                        if (!directoryCreated)
+                        {
+                            Directory.CreateDirectory(fullAssetsDir);
+                            directoryCreated = true;
+                        }
+                        
                         var fileName = $"{prefix}_{key}{ext}";
-                        var fullPath = Path.Combine(outDir, fileName);
-                        File.WriteAllBytes(fullPath, bytes);
-                        props[key] = JsonSerializer.SerializeToElement($"file://{fileName}");
+                        var filePath = Path.Combine(fullAssetsDir, fileName);
+                        File.WriteAllBytes(filePath, bytes);
+                        
+                        // Update the JSON to point to the file in the subfolder
+                        props[key] = JsonSerializer.SerializeToElement($"file:{assetsDirName}/{fileName}");
                     }
                 }
             }
@@ -537,11 +644,11 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("  --as-template exports both properties and structural layout to clone the form from scratch.");
         stdout.WriteLine("  --extract-images extracts base64 picture/mouseIcon to separate binary files and uses file:// references.");
         stdout.WriteLine("frxedit inspect <UserForm.frm> --out layout.json --raw-out layout.raw.json");
-        stdout.WriteLine("frxedit apply <UserForm.frm> <patch.json> --out <UserForm.patched.frm> [--mode tolerant|strict|legacy]");
-        stdout.WriteLine("  apply supports safe in-place edits: renames, layout, tabIndex, colors, fontSize, and short strings that fit current StringSpan capacity.");
-        stdout.WriteLine("frxedit rebuild <UserForm.frm> --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode container|object-roundtrip|object-serialize|object-normalize|object-patch|full-patch] [--patch patch.json] [--report-out rebuild.report.json]");
-        stdout.WriteLine("  rebuild regenerates the OLE/CFB container. stream-mode object-roundtrip reconstructs o streams from parser-identified object slices; object-serialize rewrites fixed-length known fields through control serializers; object-normalize rebuilds o streams with normalized counted strings and updates ObjectStreamSize metadata in f streams; object-patch applies variable-length object-payload property patches before rebuilding; full-patch also rebuilds FormSiteData for layout, renames, add, and remove.");
+        stdout.WriteLine("frxedit build <UserForm.frm> [<patch.json>] --out <UserForm.rebuilt.frm> [--mode strict] [--stream-mode full-patch] [--report-out rebuild.report.json]");
+        stdout.WriteLine("  build regenerates the OLE/CFB container. Merges patch structural changes, code and properties seamlessly. stream-mode defaults to full-patch.");
         stdout.WriteLine("frxedit create <UserFormNew.frm> --name UserFormNew [--caption Demo] [--widthPt 340] [--heightPt 240] [--patch form.patch.json]");
+        stdout.WriteLine("frxedit watch <UserForm.frm> [<patch.json>] [--out <UserForm.patched.frm>]");
+        stdout.WriteLine("  watch automatically rebuilds the UserForm when the JSON, VBA, or image assets change.");
         stdout.WriteLine("frxedit validate <UserForm.frm> [--mode tolerant|strict|legacy]");
         stdout.WriteLine("frxedit dump-records <UserForm.frm> [--around TextBox3] [--before 4] [--after 8] [--out records.json]");
         stdout.WriteLine("frxedit dump-storage <UserForm.frm> [--out storage.json]");
