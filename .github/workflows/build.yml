@@ -3,10 +3,9 @@ name: Build and Release
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*.*.*" ]
   pull_request:
     branches: [ "main" ]
-  release:
-    types: [created]
 
 jobs:
   build:
@@ -40,3 +39,28 @@ jobs:
       with:
         name: frxedit-${{ matrix.os }}
         path: ./publish/${{ matrix.runtime }}/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v4
+        
+      - name: Zip binaries
+        run: |
+          zip -j frxedit-windows.zip frxedit-windows/*
+          zip -j frxedit-linux.zip frxedit-linux/*
+          zip -j frxedit-osx.zip frxedit-osx/*
+          
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            frxedit-windows.zip
+            frxedit-linux.zip
+            frxedit-osx.zip
+          generate_release_notes: true
