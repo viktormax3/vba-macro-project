@@ -31,14 +31,23 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore src/FrxEdit.Cli/FrxEdit.Cli.csproj
       
-    - name: Build and Publish
-      run: dotnet publish src/FrxEdit.Cli/FrxEdit.Cli.csproj -c Release -r ${{ matrix.runtime }} --self-contained true -p:PublishSingleFile=true -o ./publish/${{ matrix.runtime }}
+    - name: Build Framework-Dependent
+      run: dotnet publish src/FrxEdit.Cli/FrxEdit.Cli.csproj -c Release -r ${{ matrix.runtime }} --self-contained false -p:PublishSingleFile=true -o ./publish/dependent/${{ matrix.runtime }}
+
+    - name: Build Standalone
+      run: dotnet publish src/FrxEdit.Cli/FrxEdit.Cli.csproj -c Release -r ${{ matrix.runtime }} --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -o ./publish/standalone/${{ matrix.runtime }}
       
-    - name: Upload Artifact
+    - name: Upload Artifact Dependent
       uses: actions/upload-artifact@v4
       with:
-        name: frxedit-${{ matrix.os }}
-        path: ./publish/${{ matrix.runtime }}/*
+        name: frxedit-${{ matrix.os }}-framework-dependent
+        path: ./publish/dependent/${{ matrix.runtime }}/*
+
+    - name: Upload Artifact Standalone
+      uses: actions/upload-artifact@v4
+      with:
+        name: frxedit-${{ matrix.os }}-standalone
+        path: ./publish/standalone/${{ matrix.runtime }}/*
 
   release:
     needs: build
@@ -52,15 +61,17 @@ jobs:
         
       - name: Zip binaries
         run: |
-          zip -j frxedit-windows.zip frxedit-windows/*
-          zip -j frxedit-linux.zip frxedit-linux/*
-          zip -j frxedit-osx.zip frxedit-osx/*
+          zip -j frxedit-windows-framework-dependent.zip frxedit-windows-framework-dependent/*
+          zip -j frxedit-windows-standalone.zip frxedit-windows-standalone/*
+          zip -j frxedit-linux-framework-dependent.zip frxedit-linux-framework-dependent/*
+          zip -j frxedit-linux-standalone.zip frxedit-linux-standalone/*
+          zip -j frxedit-osx-framework-dependent.zip frxedit-osx-framework-dependent/*
+          zip -j frxedit-osx-standalone.zip frxedit-osx-standalone/*
           
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            frxedit-windows.zip
-            frxedit-linux.zip
-            frxedit-osx.zip
+            frxedit-*-framework-dependent.zip
+            frxedit-*-standalone.zip
           generate_release_notes: true
