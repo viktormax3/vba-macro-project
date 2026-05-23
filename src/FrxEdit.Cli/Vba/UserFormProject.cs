@@ -324,12 +324,12 @@ internal sealed class UserFormProject
 
         SyncPtProperty("ClientHeight", "displayedHeightPt");
         SyncPtProperty("ClientWidth", "displayedWidthPt");
-        SyncPtProperty("Left", "Left");
-        SyncPtProperty("Top", "Top");
-        SyncPtProperty("Width", "Width");
-        SyncPtProperty("Height", "Height");
-        SyncPtProperty("ClientLeft", "ClientLeft");
-        SyncPtProperty("ClientTop", "ClientTop");
+        SyncNumericProperty("Left", "Left");
+        SyncNumericProperty("Top", "Top");
+        SyncNumericProperty("Width", "Width");
+        SyncNumericProperty("Height", "Height");
+        SyncNumericProperty("ClientLeft", "ClientLeft");
+        SyncNumericProperty("ClientTop", "ClientTop");
         SyncNumericProperty("StartUpPosition", "StartUpPosition");
         SyncNumericProperty("ShowModal", "ShowModal", isBoolean: true);
         SyncStringProperty("Tag", "Tag");

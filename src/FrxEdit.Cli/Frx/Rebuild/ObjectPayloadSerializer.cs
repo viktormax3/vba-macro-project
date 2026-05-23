@@ -225,7 +225,8 @@ internal static class ObjectPayloadSerializer
         const uint defaultVarious = 0x0000_001B;
         const uint defaultPicturePosition = 0x0007_0001;
 
-        var caption = TryGetString(props, "caption", out var captionValue) ? captionValue : control.Name;
+        bool hasCaption = props.ContainsKey("caption");
+        var caption = hasCaption ? props["caption"]?.ToString() ?? string.Empty : control.Name;
         var captionBytes = Encoding.Latin1.GetBytes(caption);
         var foreColor = TryGetString(props, "foreColor", out var foreColorText) && TryParseVbaColor(foreColorText, out var parsedFore)
             ? parsedFore
@@ -248,7 +249,8 @@ internal static class ObjectPayloadSerializer
             rawTakeFocus is bool b && b ||
             bool.TryParse(rawTakeFocus.ToString(), out var parsedTakeFocus) && parsedTakeFocus;
 
-        uint propMask = 0x0000_0028;
+        uint propMask = 0x0000_0020;
+        if (hasCaption) propMask |= 1u << 3;
         if (foreColor != defaultForeColor) propMask |= 1u << 0;
         if (backColor != defaultBackColor) propMask |= 1u << 1;
         if (various != defaultVarious) propMask |= 1u << 2;
@@ -265,7 +267,7 @@ internal static class ObjectPayloadSerializer
         if ((propMask & (1u << 0)) != 0) WriteUInt32(dataBlock, foreColor);
         if ((propMask & (1u << 1)) != 0) WriteUInt32(dataBlock, backColor);
         if ((propMask & (1u << 2)) != 0) WriteUInt32(dataBlock, various);
-        WriteCount(dataBlock, captionBytes.Length);
+        if ((propMask & (1u << 3)) != 0) WriteCount(dataBlock, captionBytes.Length);
         if ((propMask & (1u << 4)) != 0) WriteUInt32(dataBlock, picturePosition);
         if ((propMask & (1u << 6)) != 0)
         {
@@ -289,8 +291,11 @@ internal static class ObjectPayloadSerializer
         WritePadding(dataBlock, 4);
 
         using var extra = new MemoryStream();
-        extra.Write(captionBytes);
-        WritePadding(extra, 4);
+        if ((propMask & (1u << 3)) != 0)
+        {
+            extra.Write(captionBytes);
+            WritePadding(extra, 4);
+        }
         WriteInt32(extra, control.RawWidth ?? 0);
         WriteInt32(extra, control.RawHeight ?? 0);
 
@@ -348,7 +353,8 @@ internal static class ObjectPayloadSerializer
         const uint defaultVarious = 0x0080_0013;
         const uint defaultPicturePosition = 0x0007_0001;
 
-        var caption = TryGetString(props, "caption", out var captionValue) ? captionValue : control.Name;
+        bool hasCaption = props.ContainsKey("caption");
+        var caption = hasCaption ? props["caption"]?.ToString() ?? string.Empty : control.Name;
         var captionBytes = Encoding.Latin1.GetBytes(caption);
         var foreColor = TryGetString(props, "foreColor", out var foreColorText) && TryParseVbaColor(foreColorText, out var parsedFore)
             ? parsedFore
@@ -370,7 +376,8 @@ internal static class ObjectPayloadSerializer
         var specialEffect = TryGetInt(props, "specialEffect", out var specialEffectRaw) ? specialEffectRaw : 0;
         var accelerator = TryGetString(props, "accelerator", out var acceleratorText) ? acceleratorText : string.Empty;
 
-        uint propMask = 0x0000_0028;
+        uint propMask = 0x0000_0020;
+        if (hasCaption) propMask |= 1u << 3;
         if (foreColor != defaultForeColor) propMask |= 1u << 0;
         if (backColor != defaultBackColor) propMask |= 1u << 1;
         if (various != defaultVarious) propMask |= 1u << 2;
