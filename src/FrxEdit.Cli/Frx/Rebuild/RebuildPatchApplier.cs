@@ -92,7 +92,7 @@ internal static class RebuildPatchApplier
         "scrollTop"
     };
 
-    public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false, string? formName = null)
+    public static LayoutInspection ApplyObjectPropertyPatch(LayoutInspection source, PatchDocument patch, bool allowFormSitePatch = false, string? formName = null, string? patchDir = null)
     {
         ValidateObjectPatch(patch, allowFormSitePatch, formName);
 
@@ -122,7 +122,7 @@ internal static class RebuildPatchApplier
                     var newFrxFormControl = new Dictionary<string, object?>(frxFormControl, StringComparer.OrdinalIgnoreCase);
                     foreach (var (propName, propVal) in formPatches)
                     {
-                        ApplyFormPropertyToDictionary(key, newFrxFormControl, propName, propVal);
+                        ApplyFormPropertyToDictionary(key, newFrxFormControl, propName, propVal, patchDir);
                     }
                     frxFormControl = newFrxFormControl;
                     break;
@@ -188,7 +188,7 @@ internal static class RebuildPatchApplier
                 continue;
             }
 
-            controls.Add(ApplyToControl(control, requested, layout, newName));
+            controls.Add(ApplyToControl(control, requested, layout, newName, patchDir));
         }
 
         if (renameByName.Count > 0)
@@ -202,12 +202,12 @@ internal static class RebuildPatchApplier
 
         if (allowFormSitePatch && moveByName.Count > 0)
         {
-            controls.AddRange(BuildMovedControls(source.Controls, controls, moveByName, patchedByName, layoutByName));
+            controls.AddRange(BuildMovedControls(source.Controls, controls, moveByName, patchedByName, layoutByName, patchDir));
         }
 
         if (allowFormSitePatch && patch.Add is { Count: > 0 })
         {
-            controls.AddRange(BuildAddedControls(source.Controls, controls, patch.Add));
+            controls.AddRange(BuildAddedControls(source.Controls, controls, patch.Add, patchDir));
         }
 
         return source with { Controls = controls, RemovedControls = removedControls, RemovedStoragePaths = removalPlan.StoragePaths, FrxFormControl = frxFormControl };
@@ -516,7 +516,8 @@ internal static class RebuildPatchApplier
         IReadOnlyList<ControlInfo> existingControls,
         Dictionary<string, string?> moveByName,
         Dictionary<string, Dictionary<string, JsonElement>> patchedByName,
-        Dictionary<string, LayoutPatch> layoutByName)
+        Dictionary<string, LayoutPatch> layoutByName,
+        string? patchDir)
     {
         var additions = new List<AddControlPatch>();
         foreach (var (controlName, newParent) in moveByName)
@@ -553,10 +554,10 @@ internal static class RebuildPatchApplier
             additions.Add(add);
         }
 
-        return BuildAddedControls(templateControls, existingControls, additions);
+        return BuildAddedControls(templateControls, existingControls, additions, patchDir);
     }
 
-    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> templateControls, IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions)
+    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> templateControls, IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions, string? patchDir)
     {
         var names = existingControls.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var maxId = templateControls.Concat(existingControls)
@@ -653,7 +654,7 @@ internal static class RebuildPatchApplier
 
             foreach (var (propertyName, value) in add.Properties ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase))
             {
-                ApplyAddPropertyToDictionary(name, props, propertyName, value);
+                ApplyAddPropertyToDictionary(name, props, propertyName, value, patchDir);
             }
 
             var left = add.Left ?? ToRawPoints(add.LeftPt) ?? template?.Left ?? 0;
@@ -947,7 +948,7 @@ internal static class RebuildPatchApplier
         return Math.Min(max + 1, ushort.MaxValue);
     }
 
-    private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout, string? newName)
+    private static ControlInfo ApplyToControl(ControlInfo control, Dictionary<string, JsonElement>? requested, LayoutPatch? layout, string? newName, string? patchDir = null)
     {
         if (control.Properties is null)
         {
@@ -957,7 +958,7 @@ internal static class RebuildPatchApplier
         var props = new Dictionary<string, object?>(control.Properties, StringComparer.OrdinalIgnoreCase);
         foreach (var (propertyName, value) in requested ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase))
         {
-            ApplyPropertyToDictionary(control.Name, props, propertyName, value);
+            ApplyPropertyToDictionary(control.Name, props, propertyName, value, patchDir);
         }
 
         var left = control.Left;
@@ -1001,7 +1002,7 @@ internal static class RebuildPatchApplier
         };
     }
 
-    private static void ApplyPropertyToDictionary(string controlName, Dictionary<string, object?> props, string propertyName, JsonElement value)
+    private static void ApplyPropertyToDictionary(string controlName, Dictionary<string, object?> props, string propertyName, JsonElement value, string? patchDir)
     {
         switch (propertyName.ToLowerInvariant())
         {
@@ -1020,6 +1021,10 @@ internal static class RebuildPatchApplier
             case "pagenames":
             case "pagecaptions":
                 props[CanonicalPropertyName(propertyName)] = RequireStringArray(controlName, propertyName, value);
+                break;
+            case "picture":
+            case "mouseicon":
+                props[CanonicalPropertyName(propertyName)] = RequirePicture(controlName, propertyName, value, patchDir);
                 break;
             case "controltiptext":
                 if (!props.ContainsKey("controlTipTextSpan"))
@@ -1184,7 +1189,7 @@ internal static class RebuildPatchApplier
         }
     }
 
-    private static void ApplyAddPropertyToDictionary(string controlName, Dictionary<string, object?> props, string propertyName, JsonElement value)
+    private static void ApplyAddPropertyToDictionary(string controlName, Dictionary<string, object?> props, string propertyName, JsonElement value, string? patchDir)
     {
         switch (propertyName.ToLowerInvariant())
         {
@@ -1265,7 +1270,7 @@ internal static class RebuildPatchApplier
                 props[CanonicalPropertyName(propertyName)] = RequireStringArray(controlName, propertyName, value);
                 break;
             default:
-                ApplyPropertyToDictionary(controlName, props, propertyName, value);
+                ApplyPropertyToDictionary(controlName, props, propertyName, value, patchDir);
                 break;
         }
     }
@@ -1289,6 +1294,9 @@ internal static class RebuildPatchApplier
             "alignment" => "alignment",
             "imemode" => "imeMode",
             "pictureposition" => "picturePosition",
+            "picturesizemode" => "pictureSizeMode",
+            "picturealignment" => "pictureAlignment",
+            "picturetiling" => "pictureTiling",
             "mousepointer" => "mousePointer",
             "borderstyle" => "borderStyle",
             "specialeffect" => "specialEffect",
@@ -1444,6 +1452,62 @@ internal static class RebuildPatchApplier
         }
 
         return value.GetString() ?? string.Empty;
+    }
+
+    private static string RequirePicture(string controlName, string propertyName, JsonElement value, string? patchDir)
+    {
+        var s = RequireString(controlName, propertyName, value);
+        if (string.IsNullOrWhiteSpace(s)) return s;
+
+        byte[] imgBytes;
+        if (s.StartsWith("base64:", StringComparison.OrdinalIgnoreCase))
+        {
+            imgBytes = Convert.FromBase64String(s["base64:".Length..]);
+            // If the base64 already has the 24-byte header (legacy export), keep it as is.
+            if (imgBytes.Length >= 24 && imgBytes[16] == 0x6C && imgBytes[17] == 0x74 && imgBytes[18] == 0x00 && imgBytes[19] == 0x00)
+            {
+                return s; // Already contains header.
+            }
+        }
+        else if (s.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = s["file://".Length..];
+            if (!Path.IsPathRooted(path) && !string.IsNullOrEmpty(patchDir))
+            {
+                path = Path.Combine(patchDir, path);
+            }
+
+            if (!File.Exists(path))
+            {
+                throw new CliException($"Picture file not found: {path} for control '{controlName}'.");
+            }
+            imgBytes = File.ReadAllBytes(path);
+        }
+        else
+        {
+            throw new CliException($"Picture property for '{controlName}' must be 'base64:...' or 'file://...'.");
+        }
+
+        // Attach the 24-byte header
+        // GUID: {0BE35204-8F91-11CE-9DE3-00AA004BB851}
+        var guidBytes = new byte[] { 0x04, 0x52, 0xE3, 0x0B, 0x91, 0x8F, 0xCE, 0x11, 0x9D, 0xE3, 0x00, 0xAA, 0x00, 0x4B, 0xB8, 0x51 };
+        var length = imgBytes.Length;
+        var header = new byte[24];
+        Array.Copy(guidBytes, 0, header, 0, 16);
+        header[16] = 0x6C; // 74 6C is 0x0000746C little-endian -> 6C 74 00 00
+        header[17] = 0x74;
+        header[18] = 0x00;
+        header[19] = 0x00;
+        header[20] = (byte)(length & 0xFF);
+        header[21] = (byte)((length >> 8) & 0xFF);
+        header[22] = (byte)((length >> 16) & 0xFF);
+        header[23] = (byte)((length >> 24) & 0xFF);
+
+        var finalBytes = new byte[24 + length];
+        Array.Copy(header, 0, finalBytes, 0, 24);
+        Array.Copy(imgBytes, 0, finalBytes, 24, length);
+
+        return $"base64:{Convert.ToBase64String(finalBytes)}";
     }
 
     private static string[] RequireStringArray(string controlName, string propertyName, JsonElement value)
@@ -1673,7 +1737,7 @@ internal static class RebuildPatchApplier
         props["formBooleanProperties"] = $"0x{bits:X8}";
     }
 
-    private static void ApplyFormPropertyToDictionary(string formKey, Dictionary<string, object?> props, string propertyName, JsonElement value)
+    private static void ApplyFormPropertyToDictionary(string formKey, Dictionary<string, object?> props, string propertyName, JsonElement value, string? patchDir)
     {
         var normalizedPropertyName = propertyName.ToLowerInvariant() switch
         {

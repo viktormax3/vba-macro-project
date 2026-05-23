@@ -171,7 +171,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
         var targetLayout = patch is null
             ? sourceLayout
-            : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch, formName: project.FormName);
+            : RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: streamMode == RebuildStreamMode.FormAndObjectPatch, formName: project.FormName, patchDir: parsed.GetOption("patch") is not null ? Path.GetDirectoryName(Path.GetFullPath(parsed.GetOption("patch")!)) : null);
         if (patch is not null)
         {
             VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
@@ -243,7 +243,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, ParserMode.Strict, project.FormProperties);
             PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
             RebuildPatchApplier.ValidateObjectPatch(patch, allowFormSitePatch: true, formName: project.FormName);
-            var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true, formName: project.FormName);
+            var targetLayout = RebuildPatchApplier.ApplyObjectPropertyPatch(sourceLayout, patch, allowFormSitePatch: true, formName: project.FormName, patchDir: Path.GetDirectoryName(Path.GetFullPath(patchPath)));
             VbaCodeGenerator.Validate(patch.Code, targetLayout.Controls);
             var rebuiltBytes = FrxRebuilder.RebuildContainer(source, targetLayout, RebuildStreamMode.FormAndObjectPatch);
             File.WriteAllBytes(outFrxPath, rebuiltBytes);

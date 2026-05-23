@@ -299,7 +299,7 @@ internal static class ObjectPayloadSerializer
         {
             if (oldDeclaredEnd >= 0 && oldDeclaredEnd <= oldTextPropsStart && oldTextPropsStart <= originalBytes.Length)
             {
-                existingStreamData = originalBytes.AsSpan(oldDeclaredEnd, oldTextPropsStart - oldDeclaredEnd).ToArray();
+                existingStreamData = RebuildTrailingData(props, originalBytes, oldDeclaredEnd, oldTextPropsStart);
             }
         }
 
@@ -420,7 +420,7 @@ internal static class ObjectPayloadSerializer
             oldDeclaredEnd <= oldTextPropsStart &&
             oldTextPropsStart <= originalBytes.Length)
         {
-            existingStreamData = originalBytes.AsSpan(oldDeclaredEnd, oldTextPropsStart - oldDeclaredEnd).ToArray();
+            existingStreamData = RebuildTrailingData(props, originalBytes, oldDeclaredEnd, oldTextPropsStart);
         }
 
         using var output = new MemoryStream();
@@ -548,7 +548,7 @@ internal static class ObjectPayloadSerializer
             streamDataEnd <= oldTextPropsStart &&
             streamDataEnd <= originalBytes.Length)
         {
-            existingStreamData = originalBytes.AsSpan(streamDataStart, streamDataEnd - streamDataStart).ToArray();
+            existingStreamData = RebuildTrailingData(props, originalBytes, streamDataStart, streamDataEnd);
         }
 
         var controlBlock = MsFormsFactoryBinary.BuildVersionedMorphControl(propMask, dataBlock.ToArray(), extra.ToArray());
@@ -1124,6 +1124,48 @@ internal static class ObjectPayloadSerializer
 
         span = new StringSpanInfo(dataLocalOffset, byteCount, paddedByteCount, compressed, countLocalOffset);
         return true;
+    }
+
+    private static byte[] RebuildTrailingData(Dictionary<string, object?> props, byte[] originalBytes, int start, int end)
+    {
+        var existing = originalBytes.AsSpan(start, end - start).ToArray();
+        var replacements = new List<(int LocalStart, int LocalEnd, byte[] Data)>();
+
+        void CheckAndAdd(string prefix)
+        {
+            if (TryGetString(props, prefix, out var base64Prefix) && base64Prefix.StartsWith("base64:") &&
+                TryGetInt(props, $"{prefix}StreamLocalOffset", out var localStart) &&
+                TryGetInt(props, $"{prefix}StreamEndLocalOffset", out var localEnd) &&
+                localStart >= start && localEnd <= end)
+            {
+                var data = Convert.FromBase64String(base64Prefix.Substring("base64:".Length));
+                replacements.Add((localStart - start, localEnd - start, data));
+            }
+        }
+
+        CheckAndAdd("mouseIcon");
+        CheckAndAdd("picture");
+
+        if (replacements.Count == 0) return existing;
+
+        replacements.Sort((a, b) => a.LocalStart.CompareTo(b.LocalStart));
+
+        using var ms = new MemoryStream();
+        int cursor = 0;
+        foreach (var rep in replacements)
+        {
+            if (rep.LocalStart > cursor)
+            {
+                ms.Write(existing, cursor, rep.LocalStart - cursor);
+            }
+            ms.Write(rep.Data, 0, rep.Data.Length);
+            cursor = rep.LocalEnd;
+        }
+        if (cursor < existing.Length)
+        {
+            ms.Write(existing, cursor, existing.Length - cursor);
+        }
+        return ms.ToArray();
     }
 
     private readonly record struct StringSpanInfo(
