@@ -22,10 +22,10 @@ classDiagram
         +boolean pictureTiling
         +uint16 scrollBars (0-3)
         +boolean keepScrollBarsVisible
-        +int32 scrollHeight (HIMETRIC)
-        +int32 scrollWidth (HIMETRIC)
-        +int32 scrollLeft (HIMETRIC)
-        +int32 scrollTop (HIMETRIC)
+        +float logicalHeightPt (Points)
+        +float logicalWidthPt (Points)
+        +float scrollLeftPt (Points)
+        +float scrollTopPt (Points)
         +boolean rightToLeft
         +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
@@ -157,10 +157,10 @@ classDiagram
         +boolean enabled
         +uint16 scrollBars (0-3)
         +boolean keepScrollBarsVisible
-        +int32 scrollHeight (HIMETRIC)
-        +int32 scrollWidth (HIMETRIC)
-        +int32 scrollLeft (HIMETRIC)
-        +int32 scrollTop (HIMETRIC)
+        +float logicalHeightPt (Points)
+        +float logicalWidthPt (Points)
+        +float scrollLeftPt (Points)
+        +float scrollTopPt (Points)
         +uint16 specialEffect (0-6)
         +uint16 borderStyle (0-1)
         +string borderColor
