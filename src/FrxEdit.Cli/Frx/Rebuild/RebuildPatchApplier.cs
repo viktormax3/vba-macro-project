@@ -1823,6 +1823,8 @@ internal static class RebuildPatchApplier
             case "displayedheightpt":
             case "logicalwidthpt":
             case "logicalheightpt":
+            case "scrollleftpt":
+            case "scrolltoppt":
             case "left":
             case "top":
             case "clientleft":
