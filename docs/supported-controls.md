@@ -14,20 +14,20 @@ classDiagram
         +string foreColor (Hex/System)
         +boolean enabled
         +string fontName
-        +number fontSize
+        +float fontSize
         +boolean fontBold
         +boolean fontItalic
-        +number pictureAlignment (0-4)
-        +number pictureSizeMode (0-3)
+        +uint16 pictureAlignment (0-4)
+        +uint16 pictureSizeMode (0-3)
         +boolean pictureTiling
-        +number scrollBars (0-3)
+        +uint16 scrollBars (0-3)
         +boolean keepScrollBarsVisible
-        +number scrollHeight
-        +number scrollWidth
-        +number scrollLeft
-        +number scrollTop
+        +int32 scrollHeight (Twips)
+        +int32 scrollWidth (Twips)
+        +int32 scrollLeft (Twips)
+        +int32 scrollTop (Twips)
         +boolean rightToLeft
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -43,9 +43,9 @@ classDiagram
         +boolean cancel
         +boolean takeFocusOnClick
         +string fontName
-        +number fontSize
-        +number picturePosition (0-12)
-        +number mousePointer (0-15, 99)
+        +float fontSize
+        +int32 picturePosition (0-12)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -64,14 +64,14 @@ classDiagram
         +boolean multiLine
         +boolean wordWrap
         +boolean selectionMargin
-        +number maxLength
+        +int32 maxLength
         +string passwordChar
-        +number textAlign (1-3)
-        +number scrollBars (0-3)
-        +number specialEffect (0-6)
-        +number borderStyle (0-1)
+        +uint16 textAlign (1-3)
+        +uint16 scrollBars (0-3)
+        +uint16 specialEffect (0-6)
+        +uint16 borderStyle (0-1)
         +string borderColor
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -83,11 +83,11 @@ classDiagram
         +boolean autoSize
         +boolean wordWrap
         +string accelerator
-        +number textAlign (1-3)
-        +number specialEffect (0-6)
-        +number borderStyle (0-1)
+        +uint16 textAlign (1-3)
+        +uint16 specialEffect (0-6)
+        +uint16 borderStyle (0-1)
         +string borderColor
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -102,10 +102,10 @@ classDiagram
         +boolean wordWrap
         +boolean tripleState
         +string accelerator
-        +number textAlign (1-3)
-        +number specialEffect (0-6)
-        +number alignment (0-1)
-        +number mousePointer (0-15, 99)
+        +uint16 textAlign (1-3)
+        +uint16 specialEffect (0-6)
+        +uint16 alignment (0-1)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -120,11 +120,11 @@ classDiagram
         +boolean wordWrap
         +boolean tripleState
         +string accelerator
-        +number textAlign (1-3)
-        +number specialEffect (0-6)
-        +number alignment (0-1)
+        +uint16 textAlign (1-3)
+        +uint16 specialEffect (0-6)
+        +uint16 alignment (0-1)
         +string groupName
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -139,9 +139,9 @@ classDiagram
         +boolean wordWrap
         +boolean tripleState
         +string accelerator
-        +number textAlign (1-3)
-        +number picturePosition (0-12)
-        +number mousePointer (0-15, 99)
+        +uint16 textAlign (1-3)
+        +int32 picturePosition (0-12)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 ```
@@ -155,16 +155,16 @@ classDiagram
         +string backColor
         +string foreColor
         +boolean enabled
-        +number scrollBars (0-3)
+        +uint16 scrollBars (0-3)
         +boolean keepScrollBarsVisible
-        +number scrollHeight
-        +number scrollWidth
-        +number scrollLeft
-        +number scrollTop
-        +number specialEffect (0-6)
-        +number borderStyle (0-1)
+        +int32 scrollHeight (Twips)
+        +int32 scrollWidth (Twips)
+        +int32 scrollLeft (Twips)
+        +int32 scrollTop (Twips)
+        +uint16 specialEffect (0-6)
+        +uint16 borderStyle (0-1)
         +string borderColor
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -172,11 +172,11 @@ classDiagram
         +string backColor
         +string foreColor
         +boolean enabled
-        +number style (0-2)
-        +number tabOrientation (0-3)
+        +uint16 style (0-2)
+        +uint16 tabOrientation (0-3)
         +boolean multiRow
-        +number value (Active Page Index)
-        +number mousePointer (0-15, 99)
+        +int32 value (Active Page Index)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
     
@@ -185,18 +185,18 @@ classDiagram
         +boolean enabled
         +string accelerator
         +boolean transitionEffect
-        +number transitionPeriod
+        +int32 transitionPeriod (ms)
     }
     
     class TabStrip {
         +string backColor
         +string foreColor
         +boolean enabled
-        +number style (0-2)
-        +number tabOrientation (0-3)
+        +uint16 style (0-2)
+        +uint16 tabOrientation (0-3)
         +boolean multiRow
-        +number value
-        +number mousePointer (0-15, 99)
+        +int32 value
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -212,15 +212,15 @@ classDiagram
         +boolean autoTab
         +boolean hideSelection
         +boolean selectionMargin
-        +number maxLength
-        +number textAlign (1-3)
-        +number style (0-2)
-        +number matchEntry (0-2)
-        +number listRows
-        +number specialEffect (0-6)
-        +number borderStyle (0-1)
+        +int32 maxLength
+        +uint16 textAlign (1-3)
+        +uint16 style (0-2)
+        +uint16 matchEntry (0-2)
+        +int32 listRows
+        +uint16 specialEffect (0-6)
+        +uint16 borderStyle (0-1)
         +string borderColor
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -230,41 +230,41 @@ classDiagram
         +string foreColor
         +boolean enabled
         +boolean locked
-        +number textAlign (1-3)
-        +number matchEntry (0-2)
-        +number multiSelect (0-2)
-        +number specialEffect (0-6)
-        +number borderStyle (0-1)
+        +uint16 textAlign (1-3)
+        +uint16 matchEntry (0-2)
+        +uint16 multiSelect (0-2)
+        +uint16 specialEffect (0-6)
+        +uint16 borderStyle (0-1)
         +string borderColor
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
     class ScrollBar {
-        +number value
-        +number min
-        +number max
-        +number smallChange
-        +number largeChange
+        +int32 value
+        +int32 min
+        +int32 max
+        +int32 smallChange
+        +int32 largeChange
         +string backColor
         +string foreColor
         +boolean enabled
         +boolean proportionalThumb
-        +number orientation (0-1)
-        +number mousePointer (0-15, 99)
+        +int32 orientation (0-1)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
     class SpinButton {
-        +number value
-        +number min
-        +number max
-        +number smallChange
+        +int32 value
+        +int32 min
+        +int32 max
+        +int32 smallChange
         +string backColor
         +string foreColor
         +boolean enabled
-        +number orientation (0-1)
-        +number mousePointer (0-15, 99)
+        +int32 orientation (0-1)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
@@ -273,13 +273,13 @@ classDiagram
         +string foreColor
         +boolean enabled
         +boolean autoSize
-        +number pictureAlignment (0-4)
-        +number pictureSizeMode (0-3)
+        +uint16 pictureAlignment (0-4)
+        +uint16 pictureSizeMode (0-3)
         +boolean pictureTiling
-        +number specialEffect (0-6)
-        +number borderStyle (0-1)
+        +uint16 specialEffect (0-6)
+        +uint16 borderStyle (0-1)
         +string borderColor
-        +number mousePointer (0-15, 99)
+        +uint16 mousePointer (0-15, 99)
         +string mouseIcon (Base64/File)
     }
 
