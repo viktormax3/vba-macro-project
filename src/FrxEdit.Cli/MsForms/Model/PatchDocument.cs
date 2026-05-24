@@ -8,13 +8,13 @@ internal sealed class PatchDocument
     public List<AddControlPatch>? Add { get; set; }
     public CodePatch? Code { get; set; }
 
-    public void Normalize()
+    public void Normalize(string? formName = null)
     {
         if (Properties is null) return;
 
         Layout ??= new Dictionary<string, LayoutPatch>(StringComparer.OrdinalIgnoreCase);
 
-        var keysToRemove = new[] { "type", "parent", "formName", "frxFile", "recordIndex", "name" };
+        var keysToRemove = new[] { "type", "parent", "formName", "frxFile", "recordIndex", "name", "$action", "$newName" };
 
         foreach (var pair in Properties)
         {
@@ -25,11 +25,51 @@ internal sealed class PatchDocument
             var isForm = string.Equals(controlName, "UserForm", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(controlName, "Form", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(controlName, "root", StringComparison.OrdinalIgnoreCase) ||
+                         (formName != null && string.Equals(controlName, formName, StringComparison.OrdinalIgnoreCase)) ||
                          (props.ContainsKey("displayedWidth") || props.ContainsKey("clientWidth")); // heuristic if formName isn't known
             
             if (isForm)
             {
                 continue;
+            }
+
+            string action = "edit";
+            if (props.TryGetValue("$action", out var actionProp) && actionProp.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                action = actionProp.GetString()?.ToLowerInvariant() ?? "edit";
+            }
+
+            if (action == "remove")
+            {
+                Remove ??= new List<string>();
+                if (!Remove.Contains(controlName)) Remove.Add(controlName);
+            }
+            else if (action == "rename")
+            {
+                if (props.TryGetValue("$newName", out var newNameProp) && newNameProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var newName = newNameProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(newName))
+                    {
+                        Renames ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        Renames[controlName] = newName;
+                    }
+                }
+            }
+            else if (action == "add" || props.ContainsKey("type"))
+            {
+                Add ??= new List<AddControlPatch>();
+                string? type = null;
+                if (props.TryGetValue("type", out var typeProp) && typeProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                    type = typeProp.GetString();
+                string? parent = null;
+                if (props.TryGetValue("parent", out var parentProp) && parentProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                    parent = parentProp.GetString();
+
+                if (!Add.Any(a => string.Equals(a.Name, controlName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Add.Add(new AddControlPatch { Name = controlName, Type = type, Parent = parent });
+                }
             }
 
             var layoutPatch = new LayoutPatch();

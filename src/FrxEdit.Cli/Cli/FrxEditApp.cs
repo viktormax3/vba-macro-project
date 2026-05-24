@@ -138,14 +138,13 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
             ? JsonSerializer.Deserialize<PatchDocument>(File.ReadAllText(patchPath), JsonOptions)
                 ?? throw new CliException("Patch file is empty.")
             : null;
-        patch?.Normalize();
-
         if (patch is not null && streamMode is not (RebuildStreamMode.ObjectStreamPatchProperties or RebuildStreamMode.FormAndObjectPatch))
         {
             throw new CliException("Option '--patch' requires '--stream-mode object-patch' or '--stream-mode full-patch'.");
         }
 
         var project = UserFormProject.Load(frmPath);
+        patch?.Normalize(project.FormName);
         var source = FrxBinary.Read(project.FrxPath);
 
         // Validate the source first. This keeps the rebuilder deliberately conservative:
@@ -297,6 +296,7 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
                         ?? throw new CliException("Patch file is empty.");
 
                     var project = UserFormProject.Load(frmPath);
+                    patch.Normalize(project.FormName);
                     var source = FrxBinary.Read(project.FrxPath);
                     var sourceLayout = source.Inspect(project.KnownControlNames, project.ControlScopes, parserMode, project.FormProperties);
                     PatchValidator.Validate(patch, sourceLayout.Controls, formName: project.FormName);
@@ -309,17 +309,33 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
 
                     var outFrxPath = Path.ChangeExtension(outFrmPath, ".frx");
                     Directory.CreateDirectory(Path.GetDirectoryName(outFrmPath)!);
-                    File.WriteAllBytes(outFrxPath, rebuiltBytes);
+
+                    var tmpFrxPath = outFrxPath + ".tmp";
+                    var tmpFrmPath = outFrmPath + ".tmp";
+
+                    File.WriteAllBytes(tmpFrxPath, rebuiltBytes);
 
                     var updatedFrm = VbaRenamer.Apply(project.FrmText, patch?.Renames);
                     updatedFrm = UserFormProject.ReplaceOleObjectBlob(updatedFrm, Path.GetFileName(outFrxPath));
                     updatedFrm = ApplyVbaFile(updatedFrm, patchPath, frmPath, project.Encoding);
                     updatedFrm = VbaCodeGenerator.Apply(updatedFrm, patch?.Code);
                     updatedFrm = UserFormProject.SynchronizeFormProperties(updatedFrm, targetLayout.FrxFormControl);
-                    File.WriteAllText(outFrmPath, updatedFrm, project.Encoding);
+                    File.WriteAllText(tmpFrmPath, updatedFrm, project.Encoding);
                     
+                    if (File.Exists(outFrxPath)) File.Replace(tmpFrxPath, outFrxPath, outFrxPath + ".bak"); else File.Move(tmpFrxPath, outFrxPath);
+                    if (File.Exists(outFrmPath)) File.Replace(tmpFrmPath, outFrmPath, outFrmPath + ".bak"); else File.Move(tmpFrmPath, outFrmPath);
+
                     var removedScopeNames = targetLayout.RemovedControls?.Select(control => control.Name).ToList() ?? patch?.Remove;
                     UserFormProject.WriteScopesCopy(outFrmPath, project.ControlScopes, patch?.Renames, removedScopeNames);
+
+                    if (parsed.HasOption("wysiwyg"))
+                    {
+                        var wysiwygPatch = FrxEdit.Cli.MsForms.Model.PatchDocumentGenerator.FromRaw(targetLayout, project.FormName);
+                        var serialized = JsonSerializer.Serialize(wysiwygPatch, JsonOptions);
+                        if (File.Exists(patchPath)) File.Copy(patchPath, patchPath + ".bak", overwrite: true);
+                        File.WriteAllText(patchPath, serialized);
+                        stdout.WriteLine($"[{DateTime.Now:HH:mm:ss}] WYSIWYG synchronized {Path.GetFileName(patchPath)}.");
+                    }
 
                     stdout.WriteLine($"[{DateTime.Now:HH:mm:ss}] Successfully rebuilt {Path.GetFileName(outFrmPath)}");
                 }
@@ -668,3 +684,4 @@ internal sealed class FrxEditApp(TextWriter stdout, TextWriter stderr)
         stdout.WriteLine("frxedit dump-stream-records <UserForm.frm> [--out stream-records.json]");
     }
 }
+

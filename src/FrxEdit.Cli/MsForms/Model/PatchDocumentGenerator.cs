@@ -169,6 +169,8 @@ internal static class PatchDocumentGenerator
             }
             
             // Add any other specific properties like 'type'
+            cleanedProps["$action"] = "edit";
+            cleanedProps["$newName"] = "";
             cleanedProps["type"] = control.Type;
             if (control.Parent != null)
             {
