@@ -1,0 +1,8 @@
+{
+  "name": "frxedit-ai-skill",
+  "description": "Skills and configuration to empower AI agents to build and edit MS-Forms (.frx) UserForms autonomously using the FrxEdit CLI.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Antigravity & User"
+  }
+}

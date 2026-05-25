@@ -1,0 +1,15 @@
+{
+  "name": "frxedit-ai-skill",
+  "description": "Skills and configuration to empower AI agents to build and edit MS-Forms (.frx) UserForms autonomously using the FrxEdit CLI.",
+  "version": "1.0.0",
+  "author": "Antigravity",
+  "capabilities": {
+    "skills": [
+      {
+        "name": "frxedit-builder",
+        "description": "A comprehensive guide on how to build and manipulate Visual Basic for Applications (VBA) UserForms entirely via JSON layout files using the FrxEdit compiler.",
+        "file": "skills/frxedit-builder.md"
+      }
+    ]
+  }
+}
