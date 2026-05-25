@@ -1,0 +1,175 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "frmPath",
+      "type": "promptString",
+      "description": "Ruta del UserForm .frm",
+      "default": "UserForm1.frm"
+    },
+    {
+      "id": "patchPath",
+      "type": "promptString",
+      "description": "Ruta del patch JSON",
+      "default": "examples/base-create-all-supported.patch.json"
+    },
+    {
+      "id": "outFrmPath",
+      "type": "promptString",
+      "description": "Ruta de salida .frm",
+      "default": "out/UserForm.generated.frm"
+    },
+    {
+      "id": "jsonOutPath",
+      "type": "promptString",
+      "description": "Ruta de salida JSON",
+      "default": "out/layout.inspect.json"
+    },
+    {
+      "id": "formName",
+      "type": "promptString",
+      "description": "Nombre del nuevo UserForm",
+      "default": "UserFormNew"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "frxedit: build solution",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "FrxEdit.sln"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "frxedit: inspect",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/FrxEdit.Cli",
+        "--",
+        "inspect",
+        "${input:frmPath}",
+        "--mode",
+        "strict",
+        "--out",
+        "${input:jsonOutPath}",
+        "--raw-out",
+        "${input:jsonOutPath}.raw.json"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "frxedit: inspect as patch",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/FrxEdit.Cli",
+        "--",
+        "inspect",
+        "${input:frmPath}",
+        "--as-patch",
+        "--out",
+        "${input:jsonOutPath}"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "frxedit: validate strict",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/FrxEdit.Cli",
+        "--",
+        "validate",
+        "${input:frmPath}",
+        "--mode",
+        "strict"
+      ],
+      "group": "test",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "frxedit: build full patch",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/FrxEdit.Cli",
+        "--",
+        "build",
+        "${input:frmPath}",
+        "${input:patchPath}",
+        "--out",
+        "${input:outFrmPath}",
+        "--mode",
+        "strict",
+        "--stream-mode",
+        "full-patch",
+        "--report-out",
+        "${input:outFrmPath}.report.json"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "frxedit: create patched form",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/FrxEdit.Cli",
+        "--",
+        "create",
+        "${input:outFrmPath}",
+        "--name",
+        "${input:formName}",
+        "--caption",
+        "${input:formName}",
+        "--widthPt",
+        "340",
+        "--heightPt",
+        "240",
+        "--patch",
+        "${input:patchPath}"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "frxedit: watch patch",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/FrxEdit.Cli",
+        "--",
+        "watch",
+        "${input:frmPath}",
+        "${input:patchPath}",
+        "--out",
+        "${input:outFrmPath}",
+        "--mode",
+        "strict",
+        "--stream-mode",
+        "full-patch"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

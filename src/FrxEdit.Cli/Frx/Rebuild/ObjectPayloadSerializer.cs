@@ -800,7 +800,7 @@ internal static class ObjectPayloadSerializer
         var header = new byte[8];
         header[0] = 0x00;
         header[1] = 0x02;
-        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)dataBlock.Length));
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)(4 + dataBlock.Length)));
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), propMask);
 
         var existingStreamData = Array.Empty<byte>();
@@ -875,7 +875,7 @@ internal static class ObjectPayloadSerializer
         var header = new byte[8];
         header[0] = 0x00;
         header[1] = 0x02;
-        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)dataBlock.Length));
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(2, 2), checked((ushort)(4 + dataBlock.Length)));
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4, 4), propMask);
 
         var existingStreamData = Array.Empty<byte>();

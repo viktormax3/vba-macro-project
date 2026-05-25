@@ -1,0 +1,23 @@
+{
+  "dotnet.defaultSolution": "FrxEdit.sln",
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true,
+    "**/out": true
+  },
+  "search.exclude": {
+    "**/bin": true,
+    "**/obj": true,
+    "**/out": true,
+    "scratch": true
+  },
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "examples/*.patch.json",
+        "*.patch.json"
+      ],
+      "url": "./docs/frxedit-patch.schema.json"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "frxedit: help",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/FrxEdit.Cli/bin/Debug/net8.0/frxedit.dll",
+      "args": [
+        "--help"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "frxedit: build solution",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "frxedit: inspect current sample",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/FrxEdit.Cli/bin/Debug/net8.0/frxedit.dll",
+      "args": [
+        "inspect",
+        "UserForm1.frm",
+        "--mode",
+        "strict",
+        "--out",
+        "out/UserForm1.inspect.json",
+        "--raw-out",
+        "out/UserForm1.inspect.raw.json"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "frxedit: build solution",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "frxedit: create from base patch",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/FrxEdit.Cli/bin/Debug/net8.0/frxedit.dll",
+      "args": [
+        "create",
+        "out/VscodeGenerated.frm",
+        "--name",
+        "VscodeGenerated",
+        "--caption",
+        "VscodeGenerated",
+        "--widthPt",
+        "340",
+        "--heightPt",
+        "240",
+        "--patch",
+        "examples/base-create-all-supported.patch.json"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "frxedit: build solution",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ]
+}

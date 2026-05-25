@@ -1,0 +1,532 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frxedit.local/schemas/frxedit-patch.schema.json",
+  "title": "FrxEdit Patch",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "renames": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/layoutPatch"
+      }
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/controlProperties"
+      }
+    },
+    "remove": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "move": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "add": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/addControl"
+      }
+    },
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tabStripPanels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "controlType": {
+      "type": "string",
+      "enum": [
+        "CommandButton",
+        "Label",
+        "TextBox",
+        "ComboBox",
+        "ListBox",
+        "CheckBox",
+        "OptionButton",
+        "ToggleButton",
+        "Image",
+        "ScrollBar",
+        "SpinButton",
+        "TabStrip",
+        "Frame",
+        "MultiPage",
+        "Page"
+      ]
+    },
+    "layoutPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "type": "integer"
+        },
+        "top": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "rawWidth": {
+          "type": "integer"
+        },
+        "rawHeight": {
+          "type": "integer"
+        },
+        "leftPt": {
+          "type": "number"
+        },
+        "topPt": {
+          "type": "number"
+        },
+        "widthPt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightPt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "addControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "required": [
+            "fromTemplate"
+          ]
+        }
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/controlType"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromTemplate": {
+          "type": "string"
+        },
+        "caption": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "left": {
+          "type": "integer"
+        },
+        "top": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "rawWidth": {
+          "type": "integer"
+        },
+        "rawHeight": {
+          "type": "integer"
+        },
+        "leftPt": {
+          "type": "number"
+        },
+        "topPt": {
+          "type": "number"
+        },
+        "widthPt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightPt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "properties": {
+          "$ref": "#/$defs/controlProperties"
+        }
+      }
+    },
+    "controlProperties": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "$action": {
+          "type": "string",
+          "enum": [
+            "edit",
+            "add",
+            "remove",
+            "rename"
+          ]
+        },
+        "$newName": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "type": {
+          "$ref": "#/$defs/controlType"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "caption": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "tag": {
+          "type": "string"
+        },
+        "controlTipText": {
+          "type": "string"
+        },
+        "controlSource": {
+          "type": "string"
+        },
+        "rowSource": {
+          "type": "string"
+        },
+        "groupName": {
+          "type": "string"
+        },
+        "accelerator": {
+          "type": "string",
+          "maxLength": 1
+        },
+        "leftPt": {
+          "type": "number"
+        },
+        "topPt": {
+          "type": "number"
+        },
+        "widthPt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "heightPt": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "backColor": {
+          "$ref": "#/$defs/color"
+        },
+        "foreColor": {
+          "$ref": "#/$defs/color"
+        },
+        "borderColor": {
+          "$ref": "#/$defs/color"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "tabStop": {
+          "type": "boolean"
+        },
+        "wordWrap": {
+          "type": "boolean"
+        },
+        "autoSize": {
+          "type": "boolean"
+        },
+        "autoWordSelect": {
+          "type": "boolean"
+        },
+        "autoTab": {
+          "type": "boolean"
+        },
+        "hideSelection": {
+          "type": "boolean"
+        },
+        "multiLine": {
+          "type": "boolean"
+        },
+        "selectionMargin": {
+          "type": "boolean"
+        },
+        "default": {
+          "type": "boolean"
+        },
+        "cancel": {
+          "type": "boolean"
+        },
+        "takeFocusOnClick": {
+          "type": "boolean"
+        },
+        "tabIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "fontName": {
+          "type": "string"
+        },
+        "fontSize": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "fontWeight": {
+          "type": "integer"
+        },
+        "fontBold": {
+          "type": "boolean"
+        },
+        "fontItalic": {
+          "type": "boolean"
+        },
+        "fontUnderline": {
+          "type": "boolean"
+        },
+        "fontStrikethrough": {
+          "type": "boolean"
+        },
+        "textAlign": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            }
+          ]
+        },
+        "alignment": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "backStyle": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "borderStyle": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "specialEffect": {
+          "type": "integer",
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            6
+          ]
+        },
+        "picturePosition": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 12
+        },
+        "pictureAlignment": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "pictureSizeMode": {
+          "type": "integer",
+          "enum": [
+            0,
+            1,
+            3
+          ]
+        },
+        "scrollBars": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "mousePointer": {
+          "type": "integer"
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passwordChar": {
+          "type": "string",
+          "maxLength": 1
+        },
+        "columnCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "boundColumn": {
+          "type": "integer"
+        },
+        "textColumn": {
+          "type": "integer"
+        },
+        "listRows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "listWidth": {
+          "type": "number"
+        },
+        "style": {
+          "type": "integer"
+        },
+        "matchEntry": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "multiSelect": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "showDropButtonWhen": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "min": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        },
+        "smallChange": {
+          "type": "integer"
+        },
+        "largeChange": {
+          "type": "integer"
+        },
+        "orientation": {
+          "type": "integer",
+          "enum": [
+            -1,
+            0,
+            1
+          ]
+        },
+        "delay": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "proportionalThumb": {
+          "type": "boolean"
+        },
+        "pageNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pageCaptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "color": {
+      "type": "string",
+      "anyOf": [
+        {
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        },
+        {
+          "pattern": "^&H[0-9A-Fa-f]{8}&$"
+        },
+        {
+          "pattern": "^system[A-Za-z0-9]+$"
+        }
+      ]
+    }
+  }
+}
