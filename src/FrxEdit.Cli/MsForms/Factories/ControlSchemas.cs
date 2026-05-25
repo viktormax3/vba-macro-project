@@ -1,4 +1,4 @@
-internal interface IGeneratedControlSchema
+﻿internal interface IGeneratedControlSchema
 {
     string Type { get; }
     uint SiteFlags { get; }
@@ -18,7 +18,9 @@ internal sealed class CommandButtonControlSchema : IGeneratedControlSchema
 
     public byte[] BuildObjectPayload(GeneratedControlRequest request)
     {
-        var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        var captionProp = MsFormsFactoryBinary.GetString(request.Properties, "caption");
+        System.Console.WriteLine($"[DEBUG] CommandButtonControlSchema.BuildObjectPayload: Name={request.Name}, request.Caption={request.Caption}, request.Properties['caption']={captionProp}");
+        var caption = request.Caption ?? captionProp ?? request.Name;
         var captionBytes = Encoding.Latin1.GetBytes(caption);
         var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
         var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
@@ -159,7 +161,9 @@ internal sealed class LabelControlSchema : IGeneratedControlSchema
 
     public byte[] BuildObjectPayload(GeneratedControlRequest request)
     {
-        var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        var captionProp = MsFormsFactoryBinary.GetString(request.Properties, "caption");
+        System.Console.WriteLine($"[DEBUG] CommandButtonControlSchema.BuildObjectPayload: Name={request.Name}, request.Caption={request.Caption}, request.Properties['caption']={captionProp}");
+        var caption = request.Caption ?? captionProp ?? request.Name;
         var captionBytes = Encoding.Latin1.GetBytes(caption);
         var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), DefaultForeColor);
         var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
@@ -479,7 +483,9 @@ internal abstract class MorphButtonControlSchema : IGeneratedControlSchema
     public byte[] BuildObjectPayload(GeneratedControlRequest request)
     {
         var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? "0";
-        var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        var captionProp = MsFormsFactoryBinary.GetString(request.Properties, "caption");
+        System.Console.WriteLine($"[DEBUG] CommandButtonControlSchema.BuildObjectPayload: Name={request.Name}, request.Caption={request.Caption}, request.Properties['caption']={captionProp}");
+        var caption = request.Caption ?? captionProp ?? request.Name;
         var valueBytes = Encoding.Latin1.GetBytes(value);
         var captionBytes = Encoding.Latin1.GetBytes(caption);
         var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
@@ -514,7 +520,9 @@ internal abstract class MorphButtonControlSchema : IGeneratedControlSchema
     public IReadOnlyDictionary<string, object?> BuildMetadata(GeneratedControlRequest request, int objectPayloadSize)
     {
         var value = request.Value ?? MsFormsFactoryBinary.GetString(request.Properties, "value") ?? "0";
-        var caption = request.Caption ?? MsFormsFactoryBinary.GetString(request.Properties, "caption") ?? request.Name;
+        var captionProp = MsFormsFactoryBinary.GetString(request.Properties, "caption");
+        System.Console.WriteLine($"[DEBUG] CommandButtonControlSchema.BuildObjectPayload: Name={request.Name}, request.Caption={request.Caption}, request.Properties['caption']={captionProp}");
+        var caption = request.Caption ?? captionProp ?? request.Name;
         var groupName = MsFormsFactoryBinary.GetString(request.Properties, "groupName") ?? string.Empty;
         var backColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "backColor"), DefaultBackColor);
         var foreColor = MsFormsFactoryBinary.ParseColor(MsFormsFactoryBinary.GetString(request.Properties, "foreColor"), PersistedForeColor);
@@ -1140,3 +1148,5 @@ internal sealed class TabStripControlSchema : IGeneratedControlSchema
         return block.ToArray();
     }
 }
+
+

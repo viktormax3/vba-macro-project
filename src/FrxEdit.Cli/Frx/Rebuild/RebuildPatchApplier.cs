@@ -207,7 +207,7 @@ internal static class RebuildPatchApplier
 
         if (allowFormSitePatch && patch.Add is { Count: > 0 })
         {
-            controls.AddRange(BuildAddedControls(source.Controls, controls, patch.Add, patchDir));
+            controls.AddRange(BuildAddedControls(source.Controls, controls, patch.Add, patchDir, patchedByName, layoutByName));
         }
 
         return source with { Controls = controls, RemovedControls = removedControls, RemovedStoragePaths = removalPlan.StoragePaths, FrxFormControl = frxFormControl };
@@ -557,7 +557,7 @@ internal static class RebuildPatchApplier
         return BuildAddedControls(templateControls, existingControls, additions, patchDir);
     }
 
-    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> templateControls, IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions, string? patchDir)
+    private static IEnumerable<ControlInfo> BuildAddedControls(IReadOnlyList<ControlInfo> templateControls, IReadOnlyList<ControlInfo> existingControls, IReadOnlyList<AddControlPatch> additions, string? patchDir, Dictionary<string, Dictionary<string, JsonElement>>? patchedByName = null, Dictionary<string, LayoutPatch>? layoutByName = null)
     {
         var names = existingControls.Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var maxId = templateControls.Concat(existingControls)
@@ -571,7 +571,9 @@ internal static class RebuildPatchApplier
             var name = add.Name!.Trim();
             if (!names.Add(name))
             {
-                throw new CliException($"Add target '{name}' would duplicate an existing control.");
+                // [WYSIWYG / Idempotencia] Si el control ya existe, lo omitimos del ciclo de adición
+                // estructural. El bucle principal de propiedades se encargará de actualizarlo.
+                continue;
             }
 
             var hasTemplate = !string.IsNullOrWhiteSpace(add.FromTemplate);
@@ -618,6 +620,15 @@ internal static class RebuildPatchApplier
                 : new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             maxId++;
             props["isAddedControl"] = true;
+            
+            if (patchedByName != null && patchedByName.TryGetValue(name, out var requested))
+            {
+                foreach (var kvp in requested)
+                {
+                    ApplyPropertyToDictionary(name, props, kvp.Key, kvp.Value, patchDir);
+                }
+            }
+
             if (template is not null)
             {
                 if (!TryGetString(template.Properties!, "storagePath", out var templateStoragePath) || string.IsNullOrWhiteSpace(templateStoragePath) ||
@@ -661,6 +672,13 @@ internal static class RebuildPatchApplier
             var top = add.Top ?? ToRawPoints(add.TopPt) ?? template?.Top ?? 0;
             var rawWidth = add.RawWidth ?? add.Width ?? ToRawPoints(add.WidthPt) ?? template?.RawWidth;
             var rawHeight = add.RawHeight ?? add.Height ?? ToRawPoints(add.HeightPt) ?? template?.RawHeight;
+            if (layoutByName != null && layoutByName.TryGetValue(name, out var layout))
+            {
+                left = layout.Left ?? ToRawPoints(layout.LeftPt) ?? left;
+                top = layout.Top ?? ToRawPoints(layout.TopPt) ?? top;
+                rawWidth = layout.RawWidth ?? layout.Width ?? ToRawPoints(layout.WidthPt) ?? rawWidth;
+                rawHeight = layout.RawHeight ?? layout.Height ?? ToRawPoints(layout.HeightPt) ?? rawHeight;
+            }
 
             if (template is null && type.Equals("Page", StringComparison.OrdinalIgnoreCase))
             {
@@ -1831,7 +1849,17 @@ internal static class RebuildPatchApplier
             case "clienttop":
                 if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var doubleVal))
                 {
-                    props[CanonicalPropertyName(normalizedPropertyName)] = doubleVal;
+                    var canonicalName = CanonicalPropertyName(normalizedPropertyName);
+                    props[canonicalName] = doubleVal;
+                    
+                    if (canonicalName.EndsWith("Pt", StringComparison.Ordinal) && canonicalName.Length > 2)
+                    {
+                        var rawCanonical = canonicalName.Substring(0, canonicalName.Length - 2);
+                        if (ToRawPoints(doubleVal) is int raw)
+                        {
+                            props[rawCanonical] = raw;
+                        }
+                    }
                 }
                 else
                 {
@@ -1857,3 +1885,11 @@ internal static class RebuildPatchApplier
         return parsed;
     }
 }
+
+
+
+
+
+
+
+

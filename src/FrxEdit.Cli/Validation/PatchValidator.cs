@@ -1,4 +1,4 @@
-internal static class PatchValidator
+﻿internal static class PatchValidator
 {
     public static void Validate(PatchDocument patch, IReadOnlyList<ControlInfo> controls, string? formName = null)
     {
@@ -65,7 +65,7 @@ internal static class PatchValidator
                 continue;
             }
 
-            throw new CliException($"Layout target '{name}' does not exist.");
+            throw new CliException($"Layout target '{name}' does not exist. Layout keys: " + string.Join(",", patch.Layout.Keys));
         }
 
         foreach (var name in patch.Properties?.Keys ?? Enumerable.Empty<string>())
@@ -104,3 +104,5 @@ internal static class PatchValidator
         }
     }
 }
+
+

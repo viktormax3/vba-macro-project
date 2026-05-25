@@ -1,4 +1,4 @@
-internal sealed class CommandLine
+﻿internal sealed class CommandLine
 {
     public required List<string> Positionals { get; init; }
     public required Dictionary<string, string> Options { get; init; }
@@ -42,6 +42,7 @@ internal sealed class CommandLine
     }
 
     public string? GetOption(string name) => Options.TryGetValue(name, out var value) ? value : null;
+    public bool HasOption(string name) => Options.ContainsKey(name);
 
     public string RequireOption(string name) =>
         GetOption(name) ?? throw new CliException($"Missing required option '--{name}'.");
@@ -79,3 +80,4 @@ internal sealed class CommandLine
         return parsed;
     }
 }
+

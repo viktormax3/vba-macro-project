@@ -1,4 +1,4 @@
-# Supported Controls & Properties
+﻿# Supported Controls & Properties
 
 FrxEdit and its schema validation engine fully support the core 15 MS-Forms controls. The following diagrams define the supported properties, their expected JSON types, and valid values.
 
@@ -286,6 +286,14 @@ classDiagram
     MultiPage *-- Page : contains
 ```
 
+## Coordinate & Dimension System
+
+FrxEdit primarily operates in **Points (Pt)**, as they are independent of the display DPI mapping and provide standard layout scaling.
+
+In all JSON patches, prefer the use of leftPt, 	opPt, widthPt, and heightPt. FrxEdit will automatically perform the exact translations from Points to HiMetric or Twips based on the required control OLE structure.
+
+You can theoretically use left, 	op, width and height, but these are exposed as raw underlying metric units (HiMetric or Twips), which vary depending on whether the property relates to an object's display window or to the underlying Site structure, making them more complex to use manually.
+
 ## Enum Value References
 For properties requiring an integer enum, FrxEdit uses the standard MS-Forms VBA constants exactly as defined by Microsoft. Use the integer values below in your JSON patches.
 
@@ -420,3 +428,4 @@ The following literal strings can be used to assign dynamic OS UI colors:
 * `"system3DLight"`
 * `"systemInfoText"`
 * `"systemInfoBackground"`
+
